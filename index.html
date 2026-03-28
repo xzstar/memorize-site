@@ -77,7 +77,7 @@
             </select>
           </label>
 
-          <label class="field">
+          <label class="field" id="hideModeField">
             <span>挖空比例</span>
             <select id="hideMode">
               <option value="random-range">每句随机 10%~20%</option>
@@ -102,6 +102,10 @@
               <option value="mask">圆点</option>
             </select>
           </label>
+        </div>
+
+        <div id="sentenceChallengeHint" class="mode-note is-hidden">
+          逐句闯关使用 20% / 40% / 60% / 80% 难度梯度，当前难度可在结果区随时切换。
         </div>
 
         <div class="action-row">

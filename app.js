@@ -5,8 +5,11 @@ const EXAMPLES = {
   en: `We hold these truths to be self-evident, that all men are created equal.\n\nSuccess is the sum of small efforts, repeated day in and day out.`,
 };
 
+const SENTENCE_CHALLENGE_LEVELS = [0.2, 0.4, 0.6, 0.8];
+
 const DEFAULT_OPTIONS = {
   practiceMode: 'classic',
+  sentenceChallengeIndex: 0,
   languageMode: 'auto',
   hideMode: 'random-range',
   fixedRatio: 0.15,
@@ -127,7 +130,7 @@ export function calculateHideCount(hideableCount, ratio, language) {
 
   const raw = Math.floor(hideableCount * ratio);
   const minimum = 1;
-  const maximum = Math.max(1, Math.floor(hideableCount * 0.2));
+  const maximum = Math.max(1, hideableCount - 1);
   return Math.max(minimum, Math.min(raw || minimum, maximum));
 }
 
@@ -219,8 +222,50 @@ function formatPercent(value) {
   return `${Math.round(value * 100)}%`;
 }
 
+function getSentenceChallengeRatio(index) {
+  return SENTENCE_CHALLENGE_LEVELS[index] ?? SENTENCE_CHALLENGE_LEVELS[0];
+}
+
+function getSentenceChallengeOptions(options, difficultyIndex) {
+  return {
+    ...options,
+    hideMode: 'fixed',
+    fixedRatio: getSentenceChallengeRatio(difficultyIndex),
+  };
+}
+
+function decorateSentenceChallengeExercise(exercise, difficultyIndex, roundType = 'full', reviewText = exercise.normalizedText) {
+  return {
+    ...exercise,
+    reviewText,
+    roundType,
+    challengeLevelIndex: difficultyIndex,
+    challengeRatio: getSentenceChallengeRatio(difficultyIndex),
+  };
+}
+
+function generateSentenceChallengeExercise(text, options, difficultyIndex) {
+  return decorateSentenceChallengeExercise(
+    generateExercise(text, getSentenceChallengeOptions(options, difficultyIndex)),
+    difficultyIndex,
+  );
+}
+
+function regenerateSentenceChallengeExercise(exercise, options, difficultyIndex) {
+  return decorateSentenceChallengeExercise(
+    generateExercise(exercise.originalText, getSentenceChallengeOptions(options, difficultyIndex)),
+    difficultyIndex,
+    exercise.roundType,
+    getReviewText(exercise),
+  );
+}
+
 function formatLanguageLabel(language) {
   return language === 'zh' ? '中文' : '英文';
+}
+
+function formatSentenceChallengeLabel(difficultyIndex) {
+  return formatPercent(getSentenceChallengeRatio(difficultyIndex));
 }
 
 function getExerciseSessionKey(exercise) {
@@ -293,14 +338,12 @@ function createMistakeRetryExercise(exercise, session, options) {
     return null;
   }
 
-  return {
+  return decorateSentenceChallengeExercise({
     originalText: retrySourceSentences.join('\n'),
     normalizedText: retrySourceSentences.join('\n'),
-    reviewText: getReviewText(exercise),
     language: exercise.language,
-    roundType: 'mistake-retry',
     sentences: retrySourceSentences.map((sentence) => processSentence(sentence, exercise.language, options)),
-  };
+  }, exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex, 'mistake-retry', getReviewText(exercise));
 }
 
 function reshuffleSentence(sentence, language, options) {
@@ -322,6 +365,81 @@ function reshuffleCurrentSentence(exercise, session, options) {
       return reshuffleSentence(sentence, exercise.language, options);
     }),
   };
+}
+
+function getSentenceRoundRecommendation(exercise, session) {
+  const progress = getSentenceProgress(session);
+  const currentIndex = exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex;
+  const currentLabel = formatSentenceChallengeLabel(currentIndex);
+
+  if (progress.forgotten > 0) {
+    if (currentIndex > 0) {
+      const fallbackIndex = currentIndex - 1;
+      const fallbackLabel = formatSentenceChallengeLabel(fallbackIndex);
+      return {
+        title: `这一轮在 ${currentLabel} 有点卡住了`,
+        description: `建议先回到 ${fallbackLabel} 稳住，再继续挑战 ${currentLabel}。`,
+        primaryAction: 'jump-difficulty',
+        primaryLabel: `回到 ${fallbackLabel}`,
+        primaryLevel: fallbackIndex,
+        secondaryAction: 'retry-current',
+        secondaryLabel: `重练 ${currentLabel}`,
+      };
+    }
+
+    return {
+      title: `先把 ${currentLabel} 这一档练稳`,
+      description: '可以继续重练当前难度，或者只练错句把断点先补起来。',
+      primaryAction: 'retry-current',
+      primaryLabel: `重练 ${currentLabel}`,
+      secondaryAction: 'retry-mistakes',
+      secondaryLabel: '只练错句',
+    };
+  }
+
+  if (currentIndex < SENTENCE_CHALLENGE_LEVELS.length - 1) {
+    const nextIndex = currentIndex + 1;
+    const nextLabel = formatSentenceChallengeLabel(nextIndex);
+    return {
+      title: `${currentLabel} 已经比较稳了`,
+      description: `可以直接升到 ${nextLabel}，也可以继续留在当前档多刷几轮。`,
+      primaryAction: 'jump-difficulty',
+      primaryLabel: `升到 ${nextLabel}`,
+      primaryLevel: nextIndex,
+      secondaryAction: 'retry-current',
+      secondaryLabel: `重练 ${currentLabel}`,
+    };
+  }
+
+  return {
+    title: '你已经来到 80% 最高档',
+    description: '可以继续留在最高档反复巩固，把最难的一层练扎实。',
+    primaryAction: 'retry-current',
+    primaryLabel: '重练 80%',
+  };
+}
+
+function renderSentenceChallengeBar(exercise) {
+  const currentIndex = exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex;
+
+  return `
+    <div class="challenge-level-bar">
+      <div class="challenge-level-copy">
+        <span class="challenge-level-label">挑战难度</span>
+        <strong>${formatSentenceChallengeLabel(currentIndex)}</strong>
+      </div>
+      <div class="challenge-level-buttons">
+        ${SENTENCE_CHALLENGE_LEVELS.map((_, index) => `
+          <button
+            class="ghost-button challenge-level-button${index === currentIndex ? ' is-active' : ''}"
+            type="button"
+            data-action="jump-difficulty"
+            data-level="${index}"
+          >${formatSentenceChallengeLabel(index)}</button>
+        `).join('')}
+      </div>
+    </div>
+  `;
 }
 
 function renderSentenceCard(sentence, index, showOriginal) {
@@ -348,6 +466,7 @@ function renderSentenceMode(exercise, session) {
     const mistakeItems = exercise.sentences
       .map((sentence, index) => ({ sentence, index, rating: session.ratings[index] }))
       .filter((item) => item.rating === 'forgotten');
+    const recommendation = getSentenceRoundRecommendation(exercise, session);
 
     return `
       <section class="sentence-summary">
@@ -355,9 +474,29 @@ function renderSentenceMode(exercise, session) {
           <p class="panel-kicker">本轮完成</p>
           <h3>${exercise.roundType === 'mistake-retry' ? '这一轮错句重练已经结束' : '这一轮逐句练习已经结束'}</h3>
           <p>${exercise.roundType === 'mistake-retry' ? '你刚完成了一轮错句强化，可以继续查看整篇原文和这轮仍未记住的句子。' : '回看整篇原文，再集中复盘刚才标记为“没记住”的句子。'}</p>
-          ${mistakeItems.length ? `
+          ${renderSentenceChallengeBar(exercise)}
+          <div class="challenge-recommendation">
+            <strong>${recommendation.title}</strong>
+            <p>${recommendation.description}</p>
             <div class="summary-actions">
-              <button class="primary-button" type="button" data-action="retry-mistakes">只练错句</button>
+              <button
+                class="primary-button"
+                type="button"
+                data-action="${recommendation.primaryAction}"
+                ${typeof recommendation.primaryLevel === 'number' ? `data-level="${recommendation.primaryLevel}"` : ''}
+              >${recommendation.primaryLabel}</button>
+              ${!recommendation.secondaryAction || (recommendation.secondaryAction === 'retry-mistakes' && !mistakeItems.length) ? '' : `
+                <button
+                  class="secondary-button"
+                  type="button"
+                  data-action="${recommendation.secondaryAction}"
+                >${recommendation.secondaryLabel}</button>
+              `}
+            </div>
+          </div>
+          ${mistakeItems.length && recommendation.secondaryAction !== 'retry-mistakes' ? `
+            <div class="summary-actions">
+              <button class="secondary-button" type="button" data-action="retry-mistakes">只练错句</button>
             </div>
           ` : ''}
         </article>
@@ -428,6 +567,8 @@ function renderSentenceMode(exercise, session) {
         <div class="session-progress-pill">${progressPercent}%</div>
       </article>
 
+      ${renderSentenceChallengeBar(exercise)}
+
       <article class="sentence-card sentence-focus-card">
         <div class="sentence-top">
           <div class="sentence-index">当前练习</div>
@@ -492,6 +633,7 @@ function collectSentenceModeText(exercise, session) {
   if (session.currentIndex >= progress.total) {
     const lines = [
       '逐句练习总结',
+      `当前难度：${formatSentenceChallengeLabel(exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex)}`,
       `总句数：${progress.total}`,
       `记住了：${progress.remembered}`,
       `没记住：${progress.forgotten}`,
@@ -551,9 +693,11 @@ function initApp() {
   const practiceMode = document.querySelector('#practiceMode');
   const languageMode = document.querySelector('#languageMode');
   const hideMode = document.querySelector('#hideMode');
+  const hideModeField = document.querySelector('#hideModeField');
   const fixedRatio = document.querySelector('#fixedRatio');
   const hideStyle = document.querySelector('#hideStyle');
   const fixedRatioField = document.querySelector('#fixedRatioField');
+  const sentenceChallengeHint = document.querySelector('#sentenceChallengeHint');
   const results = document.querySelector('#results');
   const statusBar = document.querySelector('#statusBar');
   const resultMeta = document.querySelector('#resultMeta');
@@ -563,11 +707,16 @@ function initApp() {
   let showOriginal = false;
   let lastExercise = null;
   let sentenceSession = null;
+  let sentenceChallengeIndex = DEFAULT_OPTIONS.sentenceChallengeIndex;
 
   const persisted = loadPersistedState();
   if (persisted) {
     sourceText.value = persisted.text || '';
     practiceMode.value = persisted.practiceMode || DEFAULT_OPTIONS.practiceMode;
+    const persistedChallengeIndex = Number.isInteger(persisted.sentenceChallengeIndex)
+      ? persisted.sentenceChallengeIndex
+      : DEFAULT_OPTIONS.sentenceChallengeIndex;
+    sentenceChallengeIndex = Math.max(0, Math.min(persistedChallengeIndex, SENTENCE_CHALLENGE_LEVELS.length - 1));
     languageMode.value = persisted.languageMode || DEFAULT_OPTIONS.languageMode;
     hideMode.value = persisted.hideMode || DEFAULT_OPTIONS.hideMode;
     fixedRatio.value = String(persisted.fixedRatio ?? DEFAULT_OPTIONS.fixedRatio);
@@ -577,6 +726,7 @@ function initApp() {
   function getOptions() {
     return {
       practiceMode: practiceMode.value,
+      sentenceChallengeIndex,
       languageMode: languageMode.value,
       hideMode: hideMode.value,
       fixedRatio: Number(fixedRatio.value),
@@ -586,7 +736,7 @@ function initApp() {
   }
 
   function syncFixedRatioVisibility() {
-    fixedRatioField.classList.toggle('is-hidden', hideMode.value !== 'fixed');
+    fixedRatioField.classList.toggle('is-hidden', practiceMode.value === 'sentence' || hideMode.value !== 'fixed');
   }
 
   function syncPracticeModeUi() {
@@ -594,6 +744,9 @@ function initApp() {
     const sentenceTitle = lastExercise?.roundType === 'mistake-retry' ? '错句重练' : '逐句闯关';
     resultTitle.textContent = isSentenceMode ? sentenceTitle : '整段练习';
     toggleAnswerButton.classList.toggle('is-hidden', isSentenceMode);
+    hideModeField.classList.toggle('is-hidden', isSentenceMode);
+    fixedRatioField.classList.toggle('is-hidden', isSentenceMode || hideMode.value !== 'fixed');
+    sentenceChallengeHint.classList.toggle('is-hidden', !isSentenceMode);
   }
 
   function refreshMeta(exercise) {
@@ -601,6 +754,7 @@ function initApp() {
       sentenceSession = ensureSentenceSession(exercise, sentenceSession);
       const progress = getSentenceProgress(sentenceSession);
       const roundLabel = exercise.roundType === 'mistake-retry' ? '错句重练' : '逐句闯关';
+      const difficultyLabel = formatSentenceChallengeLabel(exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex);
 
       if (!progress.total) {
         resultMeta.textContent = '尚未生成';
@@ -608,11 +762,11 @@ function initApp() {
       }
 
       if (sentenceSession.currentIndex >= progress.total) {
-        resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${progress.total} 句 · 记住 ${progress.remembered} 句 · 待加强 ${progress.forgotten} 句`;
+        resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · ${progress.total} 句 · 记住 ${progress.remembered} 句 · 待加强 ${progress.forgotten} 句`;
         return;
       }
 
-      resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · 第 ${sentenceSession.currentIndex + 1}/${progress.total} 句 · 已标记 ${progress.completed} 句`;
+      resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · 第 ${sentenceSession.currentIndex + 1}/${progress.total} 句 · 已标记 ${progress.completed} 句`;
       return;
     }
 
@@ -662,11 +816,13 @@ function initApp() {
       return;
     }
 
-    lastExercise = generateExercise(text, getOptions());
-    sentenceSession = createSentenceSession(lastExercise);
+    lastExercise = practiceMode.value === 'sentence'
+      ? generateSentenceChallengeExercise(text, getOptions(), sentenceChallengeIndex)
+      : generateExercise(text, getOptions());
+    sentenceSession = practiceMode.value === 'sentence' ? createSentenceSession(lastExercise) : null;
     renderExercise(lastExercise);
     statusBar.textContent = practiceMode.value === 'sentence'
-      ? '已进入逐句闯关模式，先看原句，再开始测试。'
+      ? `已进入逐句闯关模式，当前是 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。先看原句，再开始测试。`
       : '已生成新的练习版本，可以继续重新随机。';
   }
 
@@ -742,7 +898,11 @@ function initApp() {
         return;
       }
 
-      const retryExercise = createMistakeRetryExercise(lastExercise, sentenceSession, getOptions());
+      const retryExercise = createMistakeRetryExercise(
+        lastExercise,
+        sentenceSession,
+        getSentenceChallengeOptions(getOptions(), sentenceChallengeIndex),
+      );
       if (!retryExercise) {
         statusBar.textContent = '这一轮没有“没记住”的句子，暂时不需要错句重练。';
         return;
@@ -751,7 +911,40 @@ function initApp() {
       lastExercise = retryExercise;
       sentenceSession = createSentenceSession(lastExercise);
       renderExercise(lastExercise);
-      statusBar.textContent = `已开始只练错句，本轮共 ${lastExercise.sentences.length} 句，先看原句再测试。`;
+      statusBar.textContent = `已开始只练错句，本轮共 ${lastExercise.sentences.length} 句，当前难度 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
+      return;
+    }
+
+    if (actionButton.dataset.action === 'retry-current') {
+      lastExercise = regenerateSentenceChallengeExercise(lastExercise, getOptions(), sentenceChallengeIndex);
+      sentenceSession = createSentenceSession(lastExercise);
+      renderExercise(lastExercise);
+      statusBar.textContent = `已重新开始 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 当前档训练。`;
+      return;
+    }
+
+    if (actionButton.dataset.action === 'jump-difficulty') {
+      const targetIndex = Number(actionButton.dataset.level);
+      if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= SENTENCE_CHALLENGE_LEVELS.length) {
+        return;
+      }
+
+      sentenceChallengeIndex = targetIndex;
+      saveCurrentControls();
+
+      if (!preprocessText(sourceText.value)) {
+        syncPracticeModeUi();
+        renderExercise({ sentences: [] });
+        statusBar.textContent = `已切换到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 难度，输入内容后开始训练。`;
+        return;
+      }
+
+      lastExercise = lastExercise
+        ? regenerateSentenceChallengeExercise(lastExercise, getOptions(), sentenceChallengeIndex)
+        : generateSentenceChallengeExercise(sourceText.value, getOptions(), sentenceChallengeIndex);
+      sentenceSession = createSentenceSession(lastExercise);
+      renderExercise(lastExercise);
+      statusBar.textContent = `已切换到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 难度。`;
       return;
     }
 
@@ -767,7 +960,11 @@ function initApp() {
     }
 
     if (actionButton.dataset.action === 'reshuffle-current') {
-      lastExercise = reshuffleCurrentSentence(lastExercise, sentenceSession, getOptions());
+      lastExercise = reshuffleCurrentSentence(
+        lastExercise,
+        sentenceSession,
+        getSentenceChallengeOptions(getOptions(), sentenceChallengeIndex),
+      );
       sentenceSession.stage = 'testing';
       renderExercise(lastExercise);
       statusBar.textContent = '当前句已重新随机，你可以继续只练这一句。';
@@ -830,17 +1027,17 @@ function initApp() {
     saveCurrentControls();
 
     if (lastExercise) {
-      if (lastExercise.roundType === 'mistake-retry') {
-        lastExercise = generateExercise(sourceText.value, getOptions());
+      if (practiceMode.value === 'sentence') {
+        lastExercise = generateSentenceChallengeExercise(sourceText.value, getOptions(), sentenceChallengeIndex);
         sentenceSession = createSentenceSession(lastExercise);
+      } else {
+        lastExercise = generateExercise(sourceText.value, getOptions());
+        sentenceSession = null;
       }
 
-      sentenceSession = practiceMode.value === 'sentence'
-        ? ensureSentenceSession(lastExercise, sentenceSession)
-        : sentenceSession;
       renderExercise(lastExercise);
       statusBar.textContent = practiceMode.value === 'sentence'
-        ? '已切换到逐句闯关模式，先看原句，再开始测试。'
+        ? `已切换到逐句闯关模式，当前是 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`
         : '已切换到整段练习模式。';
       return;
     }

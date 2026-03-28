@@ -243,6 +243,15 @@ select {
   margin-top: 18px;
 }
 
+.mode-note {
+  margin-top: 14px;
+  border-radius: var(--radius-md);
+  background: rgba(138, 59, 18, 0.08);
+  color: var(--brand);
+  padding: 12px 14px;
+  line-height: 1.7;
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button,
@@ -416,6 +425,72 @@ select {
 .session-progress-copy p:last-child,
 .summary-hero p:last-child {
   margin-bottom: 0;
+}
+
+.challenge-level-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: var(--radius-md);
+  background: rgba(36, 76, 68, 0.08);
+  padding: 14px 16px;
+}
+
+.challenge-level-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.challenge-level-copy strong {
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+  color: var(--ink);
+}
+
+.challenge-level-label {
+  font-size: 0.82rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.challenge-level-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.challenge-level-button {
+  min-width: 72px;
+  padding-inline: 14px;
+}
+
+.challenge-level-button.is-active {
+  background: rgba(138, 59, 18, 0.16);
+  color: var(--brand);
+  border-color: rgba(138, 59, 18, 0.18);
+}
+
+.challenge-recommendation {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.5);
+  padding: 16px;
+}
+
+.challenge-recommendation strong {
+  font-family: var(--font-display);
+  font-size: 1.16rem;
+}
+
+.challenge-recommendation p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.8;
 }
 
 .summary-actions {
@@ -627,7 +702,9 @@ select {
   .session-progress,
   .summary-section-top,
   .sentence-mode-actions,
-  .summary-actions {
+  .summary-actions,
+  .challenge-level-bar,
+  .challenge-level-buttons {
     flex-direction: column;
     align-items: stretch;
   }
