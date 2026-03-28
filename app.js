@@ -226,18 +226,106 @@ function getSentenceChallengeRatio(index) {
   return SENTENCE_CHALLENGE_LEVELS[index] ?? SENTENCE_CHALLENGE_LEVELS[0];
 }
 
-function getChallengeStageDefinitions(sourceSentences) {
-  const stages = [{ key: 'single', label: '单句关', unitLabel: '句' }];
-
-  if (sourceSentences.length >= 3) {
-    stages.push({ key: 'double-overlap', label: '双句重叠', unitLabel: '题' });
+function splitChallengeSections(normalizedText, language) {
+  if (!normalizedText) {
+    return [];
   }
 
-  if (sourceSentences.length >= 6) {
-    stages.push({ key: 'triple-overlap', label: '三句重叠', unitLabel: '题' });
+  return normalizedText
+    .split(/\n{2,}/)
+    .map((sectionText) => sectionText.trim())
+    .filter(Boolean)
+    .map((sectionText, index) => ({
+      key: `section-${index}`,
+      index,
+      label: `第 ${index + 1} 段`,
+      normalizedText: sectionText,
+      sentences: splitSentences(sectionText, language),
+    }));
+}
+
+function createStageDefinition(key, baseKey, label, unitLabel, scopeText, scopeSentences, sectionIndex = null) {
+  return {
+    key,
+    baseKey,
+    label,
+    unitLabel,
+    scopeText,
+    scopeSentences,
+    sectionIndex,
+  };
+}
+
+function buildSectionStageDefinitions(section, multiSection) {
+  const prefix = multiSection ? `${section.label} · ` : '';
+  const stages = [
+    createStageDefinition(
+      `${section.key}-single`,
+      'single',
+      `${prefix}单句关`,
+      '句',
+      section.normalizedText,
+      section.sentences,
+      section.index,
+    ),
+  ];
+
+  if (section.sentences.length >= 3) {
+    stages.push(createStageDefinition(
+      `${section.key}-double-overlap`,
+      'double-overlap',
+      `${prefix}双句重叠`,
+      '题',
+      section.normalizedText,
+      section.sentences,
+      section.index,
+    ));
   }
 
-  stages.push({ key: 'full-passage', label: '整段总关', unitLabel: '题' });
+  if (section.sentences.length >= 6) {
+    stages.push(createStageDefinition(
+      `${section.key}-triple-overlap`,
+      'triple-overlap',
+      `${prefix}三句重叠`,
+      '题',
+      section.normalizedText,
+      section.sentences,
+      section.index,
+    ));
+  }
+
+  if (multiSection || section.sentences.length > 1) {
+    stages.push(createStageDefinition(
+      `${section.key}-full-passage`,
+      'full-passage',
+      `${prefix}${multiSection ? '本段总关' : '整段总关'}`,
+      '题',
+      section.normalizedText,
+      section.sentences,
+      section.index,
+    ));
+  }
+
+  return stages;
+}
+
+function getChallengeStageDefinitions(challengeSections, normalizedText) {
+  if (challengeSections.length <= 1) {
+    return buildSectionStageDefinitions(
+      challengeSections[0] || { key: 'section-0', index: 0, label: '第 1 段', normalizedText, sentences: [] },
+      false,
+    );
+  }
+
+  const stages = challengeSections.flatMap((section) => buildSectionStageDefinitions(section, true));
+  stages.push(createStageDefinition(
+    'full-passage',
+    'full-passage',
+    '整篇总关',
+    '题',
+    normalizedText,
+    challengeSections.flatMap((section) => section.sentences),
+  ));
   return stages;
 }
 
@@ -249,19 +337,22 @@ function createChallengeSource(text, options) {
       normalizedText,
       language: 'zh',
       sourceSentences: [],
-      challengeStages: getChallengeStageDefinitions([]),
+      challengeSections: [],
+      challengeStages: getChallengeStageDefinitions([], normalizedText),
     };
   }
 
   const language = resolveLanguage(normalizedText, options.languageMode);
   const sourceSentences = splitSentences(normalizedText, language);
+  const challengeSections = splitChallengeSections(normalizedText, language);
 
   return {
     sourceText: text,
     normalizedText,
     language,
     sourceSentences,
-    challengeStages: getChallengeStageDefinitions(sourceSentences),
+    challengeSections,
+    challengeStages: getChallengeStageDefinitions(challengeSections, normalizedText),
   };
 }
 
@@ -273,8 +364,11 @@ function joinChallengeUnitTexts(unitTexts, language) {
   return language === 'en' ? unitTexts.join(' ') : unitTexts.join('');
 }
 
-function buildChallengeStageUnits(sourceSentences, normalizedText, language, stageKey) {
-  if (stageKey === 'triple-overlap') {
+function buildChallengeStageUnits(stageMeta, language) {
+  const sourceSentences = stageMeta.scopeSentences || [];
+  const normalizedText = stageMeta.scopeText || '';
+
+  if (stageMeta.baseKey === 'triple-overlap') {
     if (sourceSentences.length < 3) {
       return normalizedText ? [normalizedText] : sourceSentences;
     }
@@ -286,7 +380,7 @@ function buildChallengeStageUnits(sourceSentences, normalizedText, language, sta
     ], language));
   }
 
-  if (stageKey === 'double-overlap') {
+  if (stageMeta.baseKey === 'double-overlap') {
     if (sourceSentences.length < 2) {
       return normalizedText ? [normalizedText] : sourceSentences;
     }
@@ -294,7 +388,7 @@ function buildChallengeStageUnits(sourceSentences, normalizedText, language, sta
     return sourceSentences.slice(0, -1).map((sentence, index) => joinChallengeUnitTexts([sentence, sourceSentences[index + 1]], language));
   }
 
-  if (stageKey === 'full-passage') {
+  if (stageMeta.baseKey === 'full-passage') {
     return normalizedText ? [normalizedText] : sourceSentences;
   }
 
@@ -321,7 +415,7 @@ function decorateSentenceChallengeExercise(exercise, difficultyIndex, roundType 
 
 function buildChallengeExerciseFromSource(source, options, difficultyIndex, stageKey = 'single', roundType = 'full', reviewText = source.normalizedText) {
   const stageMeta = getChallengeStageMeta(source.challengeStages, stageKey);
-  const stageUnits = buildChallengeStageUnits(source.sourceSentences, source.normalizedText, source.language, stageMeta.key);
+  const stageUnits = buildChallengeStageUnits(stageMeta, source.language);
   const challengeOptions = getSentenceChallengeOptions(options, difficultyIndex);
 
   return decorateSentenceChallengeExercise({
@@ -330,11 +424,13 @@ function buildChallengeExerciseFromSource(source, options, difficultyIndex, stag
     normalizedText: source.normalizedText,
     language: source.language,
     sourceSentences: source.sourceSentences,
+    challengeSections: source.challengeSections,
     challengeStages: source.challengeStages,
     challengeStageKey: stageMeta.key,
     challengeStageIndex: source.challengeStages.findIndex((stage) => stage.key === stageMeta.key),
     challengeStageLabel: stageMeta.label,
     challengeUnitLabel: stageMeta.unitLabel,
+    challengeSectionIndex: stageMeta.sectionIndex,
     sentences: stageUnits.map((unitText) => processSentence(unitText, source.language, challengeOptions)),
   }, difficultyIndex, roundType, reviewText);
 }
@@ -348,17 +444,36 @@ function buildChallengeExerciseFromUnits(exercise, unitTexts, options, difficult
     normalizedText: exercise.normalizedText,
     language: exercise.language,
     sourceSentences: exercise.sourceSentences,
+    challengeSections: exercise.challengeSections,
     challengeStages: exercise.challengeStages,
     challengeStageKey: exercise.challengeStageKey,
     challengeStageIndex: exercise.challengeStageIndex,
     challengeStageLabel: exercise.challengeStageLabel,
     challengeUnitLabel: exercise.challengeUnitLabel,
+    challengeSectionIndex: exercise.challengeSectionIndex,
     sentences: unitTexts.map((unitText) => processSentence(unitText, exercise.language, challengeOptions)),
   }, difficultyIndex, roundType, getReviewText(exercise));
 }
 
 function generateSentenceChallengeExercise(text, options, difficultyIndex, stageKey = 'single') {
   return buildChallengeExerciseFromSource(createChallengeSource(text, options), options, difficultyIndex, stageKey);
+}
+
+function rebuildChallengeSourceFromExercise(exercise) {
+  const sourceText = exercise.sourceText ?? exercise.originalText;
+  const normalizedText = exercise.normalizedText;
+  const language = exercise.language;
+  const sourceSentences = exercise.sourceSentences || splitSentences(normalizedText, language);
+  const challengeSections = exercise.challengeSections || splitChallengeSections(normalizedText, language);
+
+  return {
+    sourceText,
+    normalizedText,
+    language,
+    sourceSentences,
+    challengeSections,
+    challengeStages: exercise.challengeStages || getChallengeStageDefinitions(challengeSections, normalizedText),
+  };
 }
 
 function regenerateSentenceChallengeExercise(exercise, options, difficultyIndex) {
@@ -373,13 +488,7 @@ function regenerateSentenceChallengeExercise(exercise, options, difficultyIndex)
   }
 
   return buildChallengeExerciseFromSource(
-    {
-      sourceText: exercise.sourceText ?? exercise.originalText,
-      normalizedText: exercise.normalizedText,
-      language: exercise.language,
-      sourceSentences: exercise.sourceSentences || splitSentences(exercise.normalizedText, exercise.language),
-      challengeStages: exercise.challengeStages || getChallengeStageDefinitions(exercise.sourceSentences || []),
-    },
+    rebuildChallengeSourceFromExercise(exercise),
     options,
     difficultyIndex,
     exercise.challengeStageKey || 'single',
@@ -396,6 +505,25 @@ function formatSentenceChallengeLabel(difficultyIndex) {
   return formatPercent(getSentenceChallengeRatio(difficultyIndex));
 }
 
+function getChallengeSectionProgress(exercise) {
+  const totalSections = exercise.challengeSections?.length || 0;
+  if (totalSections <= 1) {
+    return null;
+  }
+
+  if (typeof exercise.challengeSectionIndex === 'number') {
+    return {
+      label: `当前第 ${exercise.challengeSectionIndex + 1} / ${totalSections} 段`,
+      shortLabel: `第 ${exercise.challengeSectionIndex + 1} 段 / 共 ${totalSections} 段`,
+    };
+  }
+
+  return {
+    label: `已完成前 ${totalSections} 段，正在挑战整篇总关`,
+    shortLabel: `已完成 ${totalSections}/${totalSections} 段`,
+  };
+}
+
 function getNextChallengeStage(exercise) {
   const currentIndex = exercise.challengeStageIndex ?? 0;
   return exercise.challengeStages?.[currentIndex + 1] || null;
@@ -408,13 +536,7 @@ function createNextStageChallengeExercise(exercise, options, difficultyIndex) {
   }
 
   return buildChallengeExerciseFromSource(
-    {
-      sourceText: exercise.sourceText ?? exercise.originalText,
-      normalizedText: exercise.normalizedText,
-      language: exercise.language,
-      sourceSentences: exercise.sourceSentences || splitSentences(exercise.normalizedText, exercise.language),
-      challengeStages: exercise.challengeStages || getChallengeStageDefinitions(exercise.sourceSentences || []),
-    },
+    rebuildChallengeSourceFromExercise(exercise),
     options,
     difficultyIndex,
     nextStage.key,
@@ -465,7 +587,7 @@ function getEmptyStateMarkup(practiceMode) {
     return `
       <article class="empty-state">
         <h3>先贴一段内容，再开始闯关训练</h3>
-        <p>系统会先从单句关开始，再逐步进入双句重叠和整段挑战；当前题也支持单独重新随机。</p>
+        <p>系统会先从单句关开始；如果原文按段落分开，长文会优先按原段落拆关，再进入整篇总关。</p>
       </article>
     `;
   }
@@ -589,6 +711,7 @@ function getSentenceRoundRecommendation(exercise, session) {
 
 function renderSentenceChallengeBar(exercise) {
   const currentIndex = exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex;
+  const sectionProgress = getChallengeSectionProgress(exercise);
 
   return `
     <div class="challenge-level-bar">
@@ -596,6 +719,7 @@ function renderSentenceChallengeBar(exercise) {
         <span class="challenge-level-label">当前关卡</span>
         <strong>${exercise.challengeStageLabel || '单句关'}</strong>
         <span class="challenge-level-meta">挑战难度 ${formatSentenceChallengeLabel(currentIndex)}</span>
+        ${sectionProgress ? `<span class="challenge-section-meta">${sectionProgress.label}</span>` : ''}
       </div>
       <div class="challenge-level-buttons">
         ${SENTENCE_CHALLENGE_LEVELS.map((_, index) => `
@@ -931,6 +1055,8 @@ function initApp() {
       const roundLabel = exercise.roundType === 'mistake-retry' ? `${stageLabel} · 错题重练` : stageLabel;
       const difficultyLabel = formatSentenceChallengeLabel(exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex);
       const unitLabel = exercise.challengeUnitLabel || '题';
+      const sectionProgress = getChallengeSectionProgress(exercise);
+      const sectionLabel = sectionProgress ? ` · ${sectionProgress.shortLabel}` : '';
 
       if (!progress.total) {
         resultMeta.textContent = '尚未生成';
@@ -938,11 +1064,11 @@ function initApp() {
       }
 
       if (sentenceSession.currentIndex >= progress.total) {
-        resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · ${progress.total} ${unitLabel} · 记住 ${progress.remembered} ${unitLabel} · 待加强 ${progress.forgotten} ${unitLabel}`;
+        resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel}${sectionLabel} · ${difficultyLabel} · ${progress.total} ${unitLabel} · 记住 ${progress.remembered} ${unitLabel} · 待加强 ${progress.forgotten} ${unitLabel}`;
         return;
       }
 
-      resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · 第 ${sentenceSession.currentIndex + 1}/${progress.total} ${unitLabel} · 已标记 ${progress.completed} ${unitLabel}`;
+      resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel}${sectionLabel} · ${difficultyLabel} · 第 ${sentenceSession.currentIndex + 1}/${progress.total} ${unitLabel} · 已标记 ${progress.completed} ${unitLabel}`;
       return;
     }
 

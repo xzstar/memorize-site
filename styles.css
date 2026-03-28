@@ -454,6 +454,11 @@ select {
   font-size: 0.94rem;
 }
 
+.challenge-section-meta {
+  color: var(--brand);
+  font-size: 0.92rem;
+}
+
 .challenge-level-label {
   font-size: 0.82rem;
   letter-spacing: 0.12em;
