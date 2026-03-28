@@ -231,7 +231,7 @@ function createSentenceSession(exercise) {
   return {
     exerciseKey: getExerciseSessionKey(exercise),
     currentIndex: 0,
-    revealed: false,
+    stage: 'preview',
     ratings: exercise.sentences.map(() => null),
   };
 }
@@ -267,7 +267,7 @@ function getEmptyStateMarkup(practiceMode) {
     return `
       <article class="empty-state">
         <h3>先贴一段内容，再开始逐句闯关</h3>
-        <p>系统会按句生成挖空练习，然后带你一轮轮完成“先背、再看、再自评”的训练流程。</p>
+        <p>系统会先逐句显示原句，再进入单句测试；你还可以在当前句上重新随机，反复练习同一句。</p>
       </article>
     `;
   }
@@ -300,6 +300,27 @@ function createMistakeRetryExercise(exercise, session, options) {
     language: exercise.language,
     roundType: 'mistake-retry',
     sentences: retrySourceSentences.map((sentence) => processSentence(sentence, exercise.language, options)),
+  };
+}
+
+function reshuffleSentence(sentence, language, options) {
+  return {
+    ...processSentence(sentence.original, language, options),
+    id: sentence.id,
+  };
+}
+
+function reshuffleCurrentSentence(exercise, session, options) {
+  if (!exercise?.sentences?.length || session.currentIndex >= exercise.sentences.length) {
+    return exercise;
+  }
+
+  return {
+    ...exercise,
+    sentences: exercise.sentences.map((sentence, index) => {
+      if (index !== session.currentIndex) return sentence;
+      return reshuffleSentence(sentence, exercise.language, options);
+    }),
   };
 }
 
@@ -392,14 +413,17 @@ function renderSentenceMode(exercise, session) {
 
   const currentSentence = exercise.sentences[session.currentIndex];
   const progressPercent = Math.round((progress.completed / progress.total) * 100);
+  const isPreviewStage = session.stage === 'preview';
+  const isRevealStage = session.stage === 'revealed';
+  const roundLabel = exercise.roundType === 'mistake-retry' ? '错句重练' : '逐句闯关';
 
   return `
     <section class="sentence-session">
       <article class="session-progress">
         <div class="session-progress-copy">
-          <p class="panel-kicker">逐句闯关</p>
+          <p class="panel-kicker">${roundLabel}</p>
           <h3>第 ${session.currentIndex + 1} / ${progress.total} 句</h3>
-          <p>先自己背一遍，再点“查看答案”，最后标记这一句是否真的记住。</p>
+          <p>先看这一句原文，再开始测试；如果还想多练几次，可以只重新随机当前句。</p>
         </div>
         <div class="session-progress-pill">${progressPercent}%</div>
       </article>
@@ -409,22 +433,34 @@ function renderSentenceMode(exercise, session) {
           <div class="sentence-index">当前练习</div>
           <div class="sentence-stats">已标记 ${progress.completed} 句 · 剩余 ${progress.remaining} 句</div>
         </div>
-        <div class="sentence-masked sentence-focus-text">${escapeHtml(currentSentence.masked)}</div>
-        ${session.revealed ? `
+        ${isPreviewStage ? `
+          <div class="sentence-reveal sentence-preview-block">
+            <div class="sentence-reveal-label">先看原句</div>
+            <div class="sentence-original sentence-preview-text">${escapeHtml(currentSentence.original)}</div>
+          </div>
+          <div class="sentence-tip">确认自己理解了这一句，再点击下方按钮进入测试。</div>
+        ` : `
+          <div class="sentence-masked sentence-focus-text">${escapeHtml(currentSentence.masked)}</div>
+        `}
+        ${isRevealStage ? `
           <div class="sentence-reveal">
             <div class="sentence-reveal-label">原文对照</div>
             <div class="sentence-original">${escapeHtml(currentSentence.original)}</div>
           </div>
-        ` : `
+        ` : !isPreviewStage ? `
           <div class="sentence-tip">先在心里或口头背诵，再点击下方按钮看答案。</div>
-        `}
+        ` : ''}
       </article>
 
       <div class="sentence-mode-actions">
-        ${session.revealed ? `
+        ${isPreviewStage ? `
+          <button class="primary-button" type="button" data-action="start-testing">开始测试</button>
+        ` : isRevealStage ? `
+          <button class="secondary-button" type="button" data-action="reshuffle-current">本句重新随机</button>
           <button class="secondary-button rating-button rating-button-remembered" type="button" data-action="remembered">这句记住了</button>
           <button class="secondary-button rating-button rating-button-forgotten" type="button" data-action="forgotten">这句没记住</button>
         ` : `
+          <button class="secondary-button" type="button" data-action="reshuffle-current">本句重新随机</button>
           <button class="primary-button" type="button" data-action="reveal">查看答案</button>
         `}
       </div>
@@ -477,12 +513,16 @@ function collectSentenceModeText(exercise, session) {
   }
 
   const currentSentence = exercise.sentences[session.currentIndex];
-  const lines = [
-    `第 ${session.currentIndex + 1} / ${progress.total} 句`,
-    currentSentence.masked,
-  ];
+  const lines = [`第 ${session.currentIndex + 1} / ${progress.total} 句`];
 
-  if (session.revealed) {
+  if (session.stage === 'preview') {
+    lines.push('原句预览', currentSentence.original);
+    return lines.join('\n\n');
+  }
+
+  lines.push(currentSentence.masked);
+
+  if (session.stage === 'revealed') {
     lines.push('', `原文：${currentSentence.original}`);
   }
 
@@ -626,7 +666,7 @@ function initApp() {
     sentenceSession = createSentenceSession(lastExercise);
     renderExercise(lastExercise);
     statusBar.textContent = practiceMode.value === 'sentence'
-      ? '已进入逐句闯关模式，先自己背一遍，再点“查看答案”。'
+      ? '已进入逐句闯关模式，先看原句，再开始测试。'
       : '已生成新的练习版本，可以继续重新随机。';
   }
 
@@ -711,7 +751,7 @@ function initApp() {
       lastExercise = retryExercise;
       sentenceSession = createSentenceSession(lastExercise);
       renderExercise(lastExercise);
-      statusBar.textContent = `已开始只练错句，本轮共 ${lastExercise.sentences.length} 句。`;
+      statusBar.textContent = `已开始只练错句，本轮共 ${lastExercise.sentences.length} 句，先看原句再测试。`;
       return;
     }
 
@@ -719,14 +759,29 @@ function initApp() {
       return;
     }
 
+    if (actionButton.dataset.action === 'start-testing') {
+      sentenceSession.stage = 'testing';
+      renderExercise(lastExercise);
+      statusBar.textContent = '已进入当前句测试，可以直接作答，也可以先重新随机这一句。';
+      return;
+    }
+
+    if (actionButton.dataset.action === 'reshuffle-current') {
+      lastExercise = reshuffleCurrentSentence(lastExercise, sentenceSession, getOptions());
+      sentenceSession.stage = 'testing';
+      renderExercise(lastExercise);
+      statusBar.textContent = '当前句已重新随机，你可以继续只练这一句。';
+      return;
+    }
+
     if (actionButton.dataset.action === 'reveal') {
-      sentenceSession.revealed = true;
+      sentenceSession.stage = 'revealed';
       renderExercise(lastExercise);
       statusBar.textContent = '已显示当前句原文，请标记自己是否真的记住。';
       return;
     }
 
-    if (!sentenceSession.revealed) {
+    if (sentenceSession.stage !== 'revealed') {
       return;
     }
 
@@ -736,7 +791,7 @@ function initApp() {
 
     const currentSentenceNumber = sentenceSession.currentIndex + 1;
     sentenceSession.ratings[sentenceSession.currentIndex] = actionButton.dataset.action;
-    sentenceSession.revealed = false;
+    sentenceSession.stage = 'preview';
 
     if (sentenceSession.currentIndex >= progress.total - 1) {
       sentenceSession.currentIndex = progress.total;
@@ -785,7 +840,7 @@ function initApp() {
         : sentenceSession;
       renderExercise(lastExercise);
       statusBar.textContent = practiceMode.value === 'sentence'
-        ? '已切换到逐句闯关模式。'
+        ? '已切换到逐句闯关模式，先看原句，再开始测试。'
         : '已切换到整段练习模式。';
       return;
     }

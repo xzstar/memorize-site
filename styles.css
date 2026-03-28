@@ -457,6 +457,10 @@ select {
   background: rgba(138, 59, 18, 0.08);
 }
 
+.sentence-preview-block {
+  margin-top: 0;
+}
+
 .sentence-reveal-label {
   margin-bottom: 10px;
   font-size: 0.84rem;
@@ -469,6 +473,14 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.sentence-preview-text {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+  color: var(--ink);
+  font-size: 1.18rem;
 }
 
 .rating-button {
