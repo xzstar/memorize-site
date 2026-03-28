@@ -233,6 +233,10 @@ function getChallengeStageDefinitions(sourceSentences) {
     stages.push({ key: 'double-overlap', label: '双句重叠', unitLabel: '题' });
   }
 
+  if (sourceSentences.length >= 6) {
+    stages.push({ key: 'triple-overlap', label: '三句重叠', unitLabel: '题' });
+  }
+
   stages.push({ key: 'full-passage', label: '整段总关', unitLabel: '题' });
   return stages;
 }
@@ -270,6 +274,18 @@ function joinChallengeUnitTexts(unitTexts, language) {
 }
 
 function buildChallengeStageUnits(sourceSentences, normalizedText, language, stageKey) {
+  if (stageKey === 'triple-overlap') {
+    if (sourceSentences.length < 3) {
+      return normalizedText ? [normalizedText] : sourceSentences;
+    }
+
+    return sourceSentences.slice(0, -2).map((sentence, index) => joinChallengeUnitTexts([
+      sentence,
+      sourceSentences[index + 1],
+      sourceSentences[index + 2],
+    ], language));
+  }
+
   if (stageKey === 'double-overlap') {
     if (sourceSentences.length < 2) {
       return normalizedText ? [normalizedText] : sourceSentences;
