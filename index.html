@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>背书练习台</title>
   <meta name="description" content="输入中文或英文，每句话随机减少 10%~20% 的内容，帮助学生进行背诵与回忆训练。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%238a3b12'/%3E%3Cpath d='M18 18h28v28H18z' fill='%23fffaf2' opacity='.18'/%3E%3Cpath d='M24 20h18a4 4 0 0 1 4 4v24H28a4 4 0 0 0-4 4V20z' fill='%23fffaf2'/%3E%3Cpath d='M28 24h12M28 30h12M28 36h8' stroke='%238a3b12' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -60,6 +61,14 @@
 
         <div class="control-grid">
           <label class="field">
+            <span>练习模式</span>
+            <select id="practiceMode">
+              <option value="classic">整段练习</option>
+              <option value="sentence">逐句闯关</option>
+            </select>
+          </label>
+
+          <label class="field">
             <span>语言模式</span>
             <select id="languageMode">
               <option value="auto">自动识别</option>
@@ -111,7 +120,7 @@
         <div class="panel-header">
           <div>
             <p class="panel-kicker">练习结果</p>
-            <h2>逐句背诵</h2>
+            <h2 id="resultTitle">整段练习</h2>
           </div>
           <div id="resultMeta" class="result-meta">尚未生成</div>
         </div>
@@ -131,8 +140,8 @@
         <h3>3 步进入练习</h3>
         <ol>
           <li>粘贴中文或英文原文。</li>
-          <li>选择语言模式、挖空比例与遮挡方式。</li>
-          <li>点击“重新随机”，反复训练同一段内容。</li>
+          <li>选择整段练习或逐句闯关，再设置难度与遮挡方式。</li>
+          <li>点击“生成练习”，按当前模式进入训练。</li>
         </ol>
       </article>
       <article class="guide-card">
