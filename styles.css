@@ -427,6 +427,57 @@ select {
   margin-bottom: 0;
 }
 
+.boss-stage-banner,
+.summary-hero.is-final-boss {
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(138, 59, 18, 0.16);
+  background: linear-gradient(135deg, rgba(138, 59, 18, 0.12), rgba(255, 250, 242, 0.94));
+}
+
+.boss-stage-banner {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+}
+
+.boss-stage-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.boss-stage-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(138, 59, 18, 0.14);
+  color: var(--brand);
+  font-size: 0.82rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.boss-stage-progress {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.boss-stage-banner h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.52rem;
+}
+
+.boss-stage-banner p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.8;
+}
+
 .challenge-level-bar {
   display: flex;
   flex-wrap: wrap;
@@ -714,7 +765,8 @@ select {
   .sentence-mode-actions,
   .summary-actions,
   .challenge-level-bar,
-  .challenge-level-buttons {
+  .challenge-level-buttons,
+  .boss-stage-top {
     flex-direction: column;
     align-items: stretch;
   }

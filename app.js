@@ -524,6 +524,34 @@ function getChallengeSectionProgress(exercise) {
   };
 }
 
+function isFinalBossStage(exercise) {
+  const currentStage = getChallengeStageMeta(exercise.challengeStages || [], exercise.challengeStageKey || 'single');
+  return currentStage.baseKey === 'full-passage' && !getNextChallengeStage(exercise);
+}
+
+function getFinalBossCopy(exercise) {
+  const hasSections = (exercise.challengeSections?.length || 0) > 1;
+
+  return {
+    badge: 'Final Boss',
+    introTitle: hasSections ? '所有分段都已经完成，开始整篇总关' : '最后一关：整篇总关',
+    introDescription: hasSections
+      ? '这次不再只练单段，而是把整篇顺序、衔接和节奏一次性串起来。'
+      : '现在要把整篇内容一次性串起来，这是当前文本的最终挑战。',
+    previewLabel: hasSections ? '先看整篇原文' : '先看整段原文',
+    previewTip: hasSections
+      ? '先在脑中把整篇顺序完整走一遍，再开始最终测试。'
+      : '先把整段整体过一遍，再开始最终测试。',
+    testingTip: hasSections
+      ? '这是整篇总关，可以继续重新随机整篇挖空版本，再反复冲刺。'
+      : '这是最后一关，可以继续重新随机整段挖空版本，再反复冲刺。',
+    summarySuccessTitle: '整篇总关通关了',
+    summarySuccessDescription: '这一轮已经把全文顺序和衔接完整串起来，可以继续冲更高难度，或者再刷一轮稳固手感。',
+    summaryReviewTitle: '整篇总关已完成，回看最后的断点',
+    summaryReviewDescription: '整篇已经跑完一轮，先把还不稳的地方补齐，再回来继续冲击最终通关。',
+  };
+}
+
 function getNextChallengeStage(exercise) {
   const currentIndex = exercise.challengeStageIndex ?? 0;
   return exercise.challengeStages?.[currentIndex + 1] || null;
@@ -648,14 +676,18 @@ function getSentenceRoundRecommendation(exercise, session) {
   const currentIndex = exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex;
   const currentLabel = formatSentenceChallengeLabel(currentIndex);
   const nextStage = exercise.roundType === 'mistake-retry' ? null : getNextChallengeStage(exercise);
+  const finalBoss = isFinalBossStage(exercise);
+  const bossCopy = finalBoss ? getFinalBossCopy(exercise) : null;
 
   if (progress.forgotten > 0) {
     if (currentIndex > 0) {
       const fallbackIndex = currentIndex - 1;
       const fallbackLabel = formatSentenceChallengeLabel(fallbackIndex);
       return {
-        title: `这一轮在 ${currentLabel} 有点卡住了`,
-        description: `建议先回到 ${fallbackLabel} 稳住，再继续挑战 ${currentLabel}。`,
+        title: finalBoss ? `整篇总关在 ${currentLabel} 有点卡住了` : `这一轮在 ${currentLabel} 有点卡住了`,
+        description: finalBoss
+          ? `建议先回到 ${fallbackLabel} 稳住整篇顺序，再回来继续冲击 ${currentLabel}。`
+          : `建议先回到 ${fallbackLabel} 稳住，再继续挑战 ${currentLabel}。`,
         primaryAction: 'jump-difficulty',
         primaryLabel: `回到 ${fallbackLabel}`,
         primaryLevel: fallbackIndex,
@@ -665,8 +697,10 @@ function getSentenceRoundRecommendation(exercise, session) {
     }
 
     return {
-      title: `先把 ${currentLabel} 这一档练稳`,
-      description: '可以继续重练当前难度，或者只练错题把断点先补起来。',
+      title: finalBoss ? `先把整篇总关的 ${currentLabel} 练稳` : `先把 ${currentLabel} 这一档练稳`,
+      description: finalBoss
+        ? '可以继续重练整篇，也可以先只练错题，把整篇里的断点补起来。'
+        : '可以继续重练当前难度，或者只练错题把断点先补起来。',
       primaryAction: 'retry-current',
       primaryLabel: `重练 ${currentLabel}`,
       secondaryAction: 'retry-mistakes',
@@ -678,15 +712,17 @@ function getSentenceRoundRecommendation(exercise, session) {
     const nextIndex = currentIndex + 1;
     const nextLabel = formatSentenceChallengeLabel(nextIndex);
     return {
-      title: `${currentLabel} 已经比较稳了`,
-      description: nextStage
+      title: finalBoss ? `整篇总关的 ${currentLabel} 已经比较稳了` : `${currentLabel} 已经比较稳了`,
+      description: finalBoss
+        ? `可以直接升到 ${nextLabel} 冲击最终通关，也可以再刷一轮整篇总关。`
+        : nextStage
         ? `可以直接升到 ${nextLabel}，也可以进入 ${nextStage.label} 继续推进。`
         : `可以直接升到 ${nextLabel}，也可以继续留在当前档多刷几轮。`,
       primaryAction: 'jump-difficulty',
       primaryLabel: `升到 ${nextLabel}`,
       primaryLevel: nextIndex,
-      secondaryAction: nextStage ? 'next-stage' : 'retry-current',
-      secondaryLabel: nextStage ? `进入${nextStage.label}` : `重练 ${currentLabel}`,
+      secondaryAction: finalBoss ? 'retry-current' : (nextStage ? 'next-stage' : 'retry-current'),
+      secondaryLabel: finalBoss ? '再刷一轮整篇总关' : (nextStage ? `进入${nextStage.label}` : `重练 ${currentLabel}`),
     };
   }
 
@@ -698,6 +734,18 @@ function getSentenceRoundRecommendation(exercise, session) {
       primaryLabel: `进入${nextStage.label}`,
       secondaryAction: 'retry-current',
       secondaryLabel: '重练 80%',
+    };
+  }
+
+  if (finalBoss && bossCopy) {
+    return {
+      title: bossCopy.summarySuccessTitle,
+      description: bossCopy.summarySuccessDescription,
+      primaryAction: 'retry-current',
+      primaryLabel: '再刷一轮整篇总关',
+      secondaryAction: 'jump-difficulty',
+      secondaryLabel: '回到 60% 快速巩固',
+      secondaryLevel: Math.max(SENTENCE_CHALLENGE_LEVELS.length - 2, 0),
     };
   }
 
@@ -750,6 +798,9 @@ function renderSentenceCard(sentence, index, showOriginal) {
 
 function renderSentenceMode(exercise, session) {
   const progress = getSentenceProgress(session);
+  const finalBoss = isFinalBossStage(exercise);
+  const bossCopy = finalBoss ? getFinalBossCopy(exercise) : null;
+  const sectionProgress = getChallengeSectionProgress(exercise);
 
   if (!progress.total) {
     return getEmptyStateMarkup('sentence');
@@ -761,13 +812,20 @@ function renderSentenceMode(exercise, session) {
       .filter((item) => item.rating === 'forgotten');
     const recommendation = getSentenceRoundRecommendation(exercise, session);
     const stageLabel = exercise.challengeStageLabel || '当前关卡';
+    const summaryTitle = finalBoss && bossCopy
+      ? (progress.forgotten ? bossCopy.summaryReviewTitle : bossCopy.summarySuccessTitle)
+      : (exercise.roundType === 'mistake-retry' ? `这一轮 ${stageLabel} 错题重练已经结束` : `这一轮 ${stageLabel} 已经结束`);
+    const summaryDescription = finalBoss && bossCopy
+      ? (progress.forgotten ? bossCopy.summaryReviewDescription : bossCopy.summarySuccessDescription)
+      : (exercise.roundType === 'mistake-retry' ? '你刚完成了一轮错题强化，可以继续查看整篇原文和这轮仍未记住的内容。' : '回看整篇原文，再集中复盘刚才标记为“没记住”的内容。');
 
     return `
       <section class="sentence-summary">
-        <article class="summary-hero">
+        <article class="summary-hero${finalBoss ? ' is-final-boss' : ''}">
           <p class="panel-kicker">本轮完成</p>
-          <h3>${exercise.roundType === 'mistake-retry' ? `这一轮 ${stageLabel} 错题重练已经结束` : `这一轮 ${stageLabel} 已经结束`}</h3>
-          <p>${exercise.roundType === 'mistake-retry' ? '你刚完成了一轮错题强化，可以继续查看整篇原文和这轮仍未记住的内容。' : '回看整篇原文，再集中复盘刚才标记为“没记住”的内容。'}</p>
+          ${finalBoss && bossCopy ? `<span class="boss-stage-badge">${bossCopy.badge}</span>` : ''}
+          <h3>${summaryTitle}</h3>
+          <p>${summaryDescription}</p>
           ${renderSentenceChallengeBar(exercise)}
           <div class="challenge-recommendation">
             <strong>${recommendation.title}</strong>
@@ -784,6 +842,7 @@ function renderSentenceMode(exercise, session) {
                   class="secondary-button"
                   type="button"
                   data-action="${recommendation.secondaryAction}"
+                  ${typeof recommendation.secondaryLevel === 'number' ? `data-level="${recommendation.secondaryLevel}"` : ''}
                 >${recommendation.secondaryLabel}</button>
               `}
             </div>
@@ -852,14 +911,30 @@ function renderSentenceMode(exercise, session) {
     ? `${exercise.challengeStageLabel || '当前关卡'} · 错题重练`
     : (exercise.challengeStageLabel || '单句关');
   const unitLabel = exercise.challengeUnitLabel || '题';
+  const stageIntroTitle = finalBoss && bossCopy ? bossCopy.introTitle : null;
+  const stageIntroDescription = finalBoss && bossCopy ? bossCopy.introDescription : null;
+  const previewLabel = finalBoss && bossCopy ? bossCopy.previewLabel : '先看原文';
+  const previewTip = finalBoss && bossCopy ? bossCopy.previewTip : '确认自己理解了这一题，再点击下方按钮进入测试。';
+  const testingTip = finalBoss && bossCopy ? bossCopy.testingTip : '先在心里或口头背诵，再点击下方按钮看答案。';
 
   return `
     <section class="sentence-session">
+      ${finalBoss && bossCopy ? `
+        <article class="boss-stage-banner">
+          <div class="boss-stage-top">
+            <span class="boss-stage-badge">${bossCopy.badge}</span>
+            ${sectionProgress ? `<span class="boss-stage-progress">${sectionProgress.label}</span>` : ''}
+          </div>
+          <h3>${stageIntroTitle}</h3>
+          <p>${stageIntroDescription}</p>
+        </article>
+      ` : ''}
+
       <article class="session-progress">
         <div class="session-progress-copy">
           <p class="panel-kicker">${roundLabel}</p>
           <h3>第 ${session.currentIndex + 1} / ${progress.total} ${unitLabel}</h3>
-          <p>先看当前内容原文，再开始测试；如果还想多练几次，可以只重新随机这一题。</p>
+          <p>${finalBoss && bossCopy ? '先把全文顺序在脑中串起来，再开始最终测试；需要的话可以重新随机整篇挖空再冲一次。' : '先看当前内容原文，再开始测试；如果还想多练几次，可以只重新随机这一题。'}</p>
         </div>
         <div class="session-progress-pill">${progressPercent}%</div>
       </article>
@@ -873,10 +948,10 @@ function renderSentenceMode(exercise, session) {
         </div>
         ${isPreviewStage ? `
           <div class="sentence-reveal sentence-preview-block">
-            <div class="sentence-reveal-label">先看原文</div>
+            <div class="sentence-reveal-label">${previewLabel}</div>
             <div class="sentence-original sentence-preview-text">${escapeHtml(currentSentence.original)}</div>
           </div>
-          <div class="sentence-tip">确认自己理解了这一题，再点击下方按钮进入测试。</div>
+          <div class="sentence-tip">${previewTip}</div>
         ` : `
           <div class="sentence-masked sentence-focus-text">${escapeHtml(currentSentence.masked)}</div>
         `}
@@ -886,7 +961,7 @@ function renderSentenceMode(exercise, session) {
             <div class="sentence-original">${escapeHtml(currentSentence.original)}</div>
           </div>
         ` : !isPreviewStage ? `
-          <div class="sentence-tip">先在心里或口头背诵，再点击下方按钮看答案。</div>
+          <div class="sentence-tip">${testingTip}</div>
         ` : ''}
       </article>
 
@@ -1124,7 +1199,7 @@ function initApp() {
     sentenceSession = practiceMode.value === 'sentence' ? createSentenceSession(lastExercise) : null;
     renderExercise(lastExercise);
     statusBar.textContent = practiceMode.value === 'sentence'
-      ? `已进入闯关训练，当前关卡 ${lastExercise.challengeStageLabel || '单句关'}，难度 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`
+      ? `${isFinalBossStage(lastExercise) ? '已进入整篇总关，准备冲刺最终挑战。' : `已进入闯关训练，当前关卡 ${lastExercise.challengeStageLabel || '单句关'}，难度 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`}`
       : '已生成新的练习版本，可以继续重新随机。';
   }
 
@@ -1138,7 +1213,7 @@ function initApp() {
 
     generate();
     statusBar.textContent = practiceMode.value === 'sentence'
-      ? '已重新开始当前闯关回合，本轮状态也已重置。'
+      ? `${isFinalBossStage(lastExercise) ? '已重新开始整篇总关，本轮状态也已重置。' : '已重新开始当前闯关回合，本轮状态也已重置。'}`
       : '已重新随机，每句话的缺失位置都更新了。';
   });
 
@@ -1221,7 +1296,9 @@ function initApp() {
       lastExercise = regenerateSentenceChallengeExercise(lastExercise, getOptions(), sentenceChallengeIndex);
       sentenceSession = createSentenceSession(lastExercise);
       renderExercise(lastExercise);
-      statusBar.textContent = `已重新开始 ${lastExercise.challengeStageLabel || '当前关卡'} · ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
+      statusBar.textContent = isFinalBossStage(lastExercise)
+        ? `已重新开始整篇总关 · ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`
+        : `已重新开始 ${lastExercise.challengeStageLabel || '当前关卡'} · ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
       return;
     }
 
@@ -1246,7 +1323,9 @@ function initApp() {
         : generateSentenceChallengeExercise(sourceText.value, getOptions(), sentenceChallengeIndex);
       sentenceSession = createSentenceSession(lastExercise);
       renderExercise(lastExercise);
-      statusBar.textContent = `已切换到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 难度。`;
+      statusBar.textContent = isFinalBossStage(lastExercise)
+        ? `已切换到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 难度，继续冲击整篇总关。`
+        : `已切换到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 难度。`;
       return;
     }
 
@@ -1263,7 +1342,9 @@ function initApp() {
       lastExercise = nextExercise;
       sentenceSession = createSentenceSession(lastExercise);
       renderExercise(lastExercise);
-      statusBar.textContent = `已进入 ${lastExercise.challengeStageLabel}，继续挑战 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
+      statusBar.textContent = isFinalBossStage(lastExercise)
+        ? `已进入 ${lastExercise.challengeStageLabel}，先把整篇顺序在脑中串起来，再开始最终测试。`
+        : `已进入 ${lastExercise.challengeStageLabel}，继续挑战 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
       return;
     }
 
@@ -1274,7 +1355,9 @@ function initApp() {
     if (actionButton.dataset.action === 'start-testing') {
       sentenceSession.stage = 'testing';
       renderExercise(lastExercise);
-      statusBar.textContent = '已进入当前题测试，可以直接作答，也可以先重新随机这一题。';
+      statusBar.textContent = isFinalBossStage(lastExercise)
+        ? '已进入整篇总关测试，可以继续重新随机整篇挖空版本再冲一次。'
+        : '已进入当前题测试，可以直接作答，也可以先重新随机这一题。';
       return;
     }
 
@@ -1286,14 +1369,18 @@ function initApp() {
       );
       sentenceSession.stage = 'testing';
       renderExercise(lastExercise);
-      statusBar.textContent = '当前题已重新随机，你可以继续只练这一题。';
+      statusBar.textContent = isFinalBossStage(lastExercise)
+        ? '整篇总关已重新随机，你可以继续冲刺这一轮整篇挑战。'
+        : '当前题已重新随机，你可以继续只练这一题。';
       return;
     }
 
     if (actionButton.dataset.action === 'reveal') {
       sentenceSession.stage = 'revealed';
       renderExercise(lastExercise);
-      statusBar.textContent = '已显示当前题原文，请标记自己是否真的记住。';
+      statusBar.textContent = isFinalBossStage(lastExercise)
+        ? '已显示整篇原文，请判断这一轮是否真的把全文串起来了。'
+        : '已显示当前题原文，请标记自己是否真的记住。';
       return;
     }
 
@@ -1314,7 +1401,7 @@ function initApp() {
       renderExercise(lastExercise);
       statusBar.textContent = lastExercise.roundType === 'mistake-retry'
         ? '本轮错题重练已完成，可以继续回看整篇原文和剩余错题。'
-        : `本轮 ${lastExercise.challengeStageLabel || '闯关训练'} 已完成，可以继续查看总结建议。`;
+        : `${isFinalBossStage(lastExercise) ? '整篇总关这一轮已完成，可以查看最终总结和建议。' : `本轮 ${lastExercise.challengeStageLabel || '闯关训练'} 已完成，可以继续查看总结建议。`}`;
       return;
     }
 
