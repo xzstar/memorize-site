@@ -226,6 +226,65 @@ function getSentenceChallengeRatio(index) {
   return SENTENCE_CHALLENGE_LEVELS[index] ?? SENTENCE_CHALLENGE_LEVELS[0];
 }
 
+function getChallengeStageDefinitions(sourceSentences) {
+  const stages = [{ key: 'single', label: '单句关', unitLabel: '句' }];
+
+  if (sourceSentences.length >= 3) {
+    stages.push({ key: 'double-overlap', label: '双句重叠', unitLabel: '题' });
+  }
+
+  stages.push({ key: 'full-passage', label: '整段总关', unitLabel: '题' });
+  return stages;
+}
+
+function createChallengeSource(text, options) {
+  const normalizedText = preprocessText(text);
+  if (!normalizedText) {
+    return {
+      sourceText: text,
+      normalizedText,
+      language: 'zh',
+      sourceSentences: [],
+      challengeStages: getChallengeStageDefinitions([]),
+    };
+  }
+
+  const language = resolveLanguage(normalizedText, options.languageMode);
+  const sourceSentences = splitSentences(normalizedText, language);
+
+  return {
+    sourceText: text,
+    normalizedText,
+    language,
+    sourceSentences,
+    challengeStages: getChallengeStageDefinitions(sourceSentences),
+  };
+}
+
+function getChallengeStageMeta(challengeStages, stageKey) {
+  return challengeStages.find((stage) => stage.key === stageKey) || challengeStages[0] || { key: 'single', label: '单句关', unitLabel: '句' };
+}
+
+function joinChallengeUnitTexts(unitTexts, language) {
+  return language === 'en' ? unitTexts.join(' ') : unitTexts.join('');
+}
+
+function buildChallengeStageUnits(sourceSentences, normalizedText, language, stageKey) {
+  if (stageKey === 'double-overlap') {
+    if (sourceSentences.length < 2) {
+      return normalizedText ? [normalizedText] : sourceSentences;
+    }
+
+    return sourceSentences.slice(0, -1).map((sentence, index) => joinChallengeUnitTexts([sentence, sourceSentences[index + 1]], language));
+  }
+
+  if (stageKey === 'full-passage') {
+    return normalizedText ? [normalizedText] : sourceSentences;
+  }
+
+  return sourceSentences;
+}
+
 function getSentenceChallengeOptions(options, difficultyIndex) {
   return {
     ...options,
@@ -244,17 +303,70 @@ function decorateSentenceChallengeExercise(exercise, difficultyIndex, roundType 
   };
 }
 
-function generateSentenceChallengeExercise(text, options, difficultyIndex) {
-  return decorateSentenceChallengeExercise(
-    generateExercise(text, getSentenceChallengeOptions(options, difficultyIndex)),
-    difficultyIndex,
-  );
+function buildChallengeExerciseFromSource(source, options, difficultyIndex, stageKey = 'single', roundType = 'full', reviewText = source.normalizedText) {
+  const stageMeta = getChallengeStageMeta(source.challengeStages, stageKey);
+  const stageUnits = buildChallengeStageUnits(source.sourceSentences, source.normalizedText, source.language, stageMeta.key);
+  const challengeOptions = getSentenceChallengeOptions(options, difficultyIndex);
+
+  return decorateSentenceChallengeExercise({
+    originalText: source.sourceText,
+    sourceText: source.sourceText,
+    normalizedText: source.normalizedText,
+    language: source.language,
+    sourceSentences: source.sourceSentences,
+    challengeStages: source.challengeStages,
+    challengeStageKey: stageMeta.key,
+    challengeStageIndex: source.challengeStages.findIndex((stage) => stage.key === stageMeta.key),
+    challengeStageLabel: stageMeta.label,
+    challengeUnitLabel: stageMeta.unitLabel,
+    sentences: stageUnits.map((unitText) => processSentence(unitText, source.language, challengeOptions)),
+  }, difficultyIndex, roundType, reviewText);
+}
+
+function buildChallengeExerciseFromUnits(exercise, unitTexts, options, difficultyIndex, roundType) {
+  const challengeOptions = getSentenceChallengeOptions(options, difficultyIndex);
+
+  return decorateSentenceChallengeExercise({
+    originalText: exercise.originalText,
+    sourceText: exercise.sourceText,
+    normalizedText: exercise.normalizedText,
+    language: exercise.language,
+    sourceSentences: exercise.sourceSentences,
+    challengeStages: exercise.challengeStages,
+    challengeStageKey: exercise.challengeStageKey,
+    challengeStageIndex: exercise.challengeStageIndex,
+    challengeStageLabel: exercise.challengeStageLabel,
+    challengeUnitLabel: exercise.challengeUnitLabel,
+    sentences: unitTexts.map((unitText) => processSentence(unitText, exercise.language, challengeOptions)),
+  }, difficultyIndex, roundType, getReviewText(exercise));
+}
+
+function generateSentenceChallengeExercise(text, options, difficultyIndex, stageKey = 'single') {
+  return buildChallengeExerciseFromSource(createChallengeSource(text, options), options, difficultyIndex, stageKey);
 }
 
 function regenerateSentenceChallengeExercise(exercise, options, difficultyIndex) {
-  return decorateSentenceChallengeExercise(
-    generateExercise(exercise.originalText, getSentenceChallengeOptions(options, difficultyIndex)),
+  if (exercise.roundType === 'mistake-retry') {
+    return buildChallengeExerciseFromUnits(
+      exercise,
+      exercise.sentences.map((sentence) => sentence.original),
+      options,
+      difficultyIndex,
+      exercise.roundType,
+    );
+  }
+
+  return buildChallengeExerciseFromSource(
+    {
+      sourceText: exercise.sourceText ?? exercise.originalText,
+      normalizedText: exercise.normalizedText,
+      language: exercise.language,
+      sourceSentences: exercise.sourceSentences || splitSentences(exercise.normalizedText, exercise.language),
+      challengeStages: exercise.challengeStages || getChallengeStageDefinitions(exercise.sourceSentences || []),
+    },
+    options,
     difficultyIndex,
+    exercise.challengeStageKey || 'single',
     exercise.roundType,
     getReviewText(exercise),
   );
@@ -266,6 +378,31 @@ function formatLanguageLabel(language) {
 
 function formatSentenceChallengeLabel(difficultyIndex) {
   return formatPercent(getSentenceChallengeRatio(difficultyIndex));
+}
+
+function getNextChallengeStage(exercise) {
+  const currentIndex = exercise.challengeStageIndex ?? 0;
+  return exercise.challengeStages?.[currentIndex + 1] || null;
+}
+
+function createNextStageChallengeExercise(exercise, options, difficultyIndex) {
+  const nextStage = getNextChallengeStage(exercise);
+  if (!nextStage) {
+    return null;
+  }
+
+  return buildChallengeExerciseFromSource(
+    {
+      sourceText: exercise.sourceText ?? exercise.originalText,
+      normalizedText: exercise.normalizedText,
+      language: exercise.language,
+      sourceSentences: exercise.sourceSentences || splitSentences(exercise.normalizedText, exercise.language),
+      challengeStages: exercise.challengeStages || getChallengeStageDefinitions(exercise.sourceSentences || []),
+    },
+    options,
+    difficultyIndex,
+    nextStage.key,
+  );
 }
 
 function getExerciseSessionKey(exercise) {
@@ -311,8 +448,8 @@ function getEmptyStateMarkup(practiceMode) {
   if (practiceMode === 'sentence') {
     return `
       <article class="empty-state">
-        <h3>先贴一段内容，再开始逐句闯关</h3>
-        <p>系统会先逐句显示原句，再进入单句测试；你还可以在当前句上重新随机，反复练习同一句。</p>
+        <h3>先贴一段内容，再开始闯关训练</h3>
+        <p>系统会先从单句关开始，再逐步进入双句重叠和整段挑战；当前题也支持单独重新随机。</p>
       </article>
     `;
   }
@@ -338,12 +475,13 @@ function createMistakeRetryExercise(exercise, session, options) {
     return null;
   }
 
-  return decorateSentenceChallengeExercise({
-    originalText: retrySourceSentences.join('\n'),
-    normalizedText: retrySourceSentences.join('\n'),
-    language: exercise.language,
-    sentences: retrySourceSentences.map((sentence) => processSentence(sentence, exercise.language, options)),
-  }, exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex, 'mistake-retry', getReviewText(exercise));
+  return buildChallengeExerciseFromUnits(
+    exercise,
+    retrySourceSentences,
+    options,
+    exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex,
+    'mistake-retry',
+  );
 }
 
 function reshuffleSentence(sentence, language, options) {
@@ -371,6 +509,7 @@ function getSentenceRoundRecommendation(exercise, session) {
   const progress = getSentenceProgress(session);
   const currentIndex = exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex;
   const currentLabel = formatSentenceChallengeLabel(currentIndex);
+  const nextStage = exercise.roundType === 'mistake-retry' ? null : getNextChallengeStage(exercise);
 
   if (progress.forgotten > 0) {
     if (currentIndex > 0) {
@@ -389,11 +528,11 @@ function getSentenceRoundRecommendation(exercise, session) {
 
     return {
       title: `先把 ${currentLabel} 这一档练稳`,
-      description: '可以继续重练当前难度，或者只练错句把断点先补起来。',
+      description: '可以继续重练当前难度，或者只练错题把断点先补起来。',
       primaryAction: 'retry-current',
       primaryLabel: `重练 ${currentLabel}`,
       secondaryAction: 'retry-mistakes',
-      secondaryLabel: '只练错句',
+      secondaryLabel: '只练错题',
     };
   }
 
@@ -402,17 +541,30 @@ function getSentenceRoundRecommendation(exercise, session) {
     const nextLabel = formatSentenceChallengeLabel(nextIndex);
     return {
       title: `${currentLabel} 已经比较稳了`,
-      description: `可以直接升到 ${nextLabel}，也可以继续留在当前档多刷几轮。`,
+      description: nextStage
+        ? `可以直接升到 ${nextLabel}，也可以进入 ${nextStage.label} 继续推进。`
+        : `可以直接升到 ${nextLabel}，也可以继续留在当前档多刷几轮。`,
       primaryAction: 'jump-difficulty',
       primaryLabel: `升到 ${nextLabel}`,
       primaryLevel: nextIndex,
+      secondaryAction: nextStage ? 'next-stage' : 'retry-current',
+      secondaryLabel: nextStage ? `进入${nextStage.label}` : `重练 ${currentLabel}`,
+    };
+  }
+
+  if (nextStage) {
+    return {
+      title: `${currentLabel} 已经打通，准备进下一关`,
+      description: `可以继续进入 ${nextStage.label}，也可以留在当前关卡巩固 80% 难度。`,
+      primaryAction: 'next-stage',
+      primaryLabel: `进入${nextStage.label}`,
       secondaryAction: 'retry-current',
-      secondaryLabel: `重练 ${currentLabel}`,
+      secondaryLabel: '重练 80%',
     };
   }
 
   return {
-    title: '你已经来到 80% 最高档',
+    title: '你已经来到最终关卡的 80% 最高档',
     description: '可以继续留在最高档反复巩固，把最难的一层练扎实。',
     primaryAction: 'retry-current',
     primaryLabel: '重练 80%',
@@ -425,8 +577,9 @@ function renderSentenceChallengeBar(exercise) {
   return `
     <div class="challenge-level-bar">
       <div class="challenge-level-copy">
-        <span class="challenge-level-label">挑战难度</span>
-        <strong>${formatSentenceChallengeLabel(currentIndex)}</strong>
+        <span class="challenge-level-label">当前关卡</span>
+        <strong>${exercise.challengeStageLabel || '单句关'}</strong>
+        <span class="challenge-level-meta">挑战难度 ${formatSentenceChallengeLabel(currentIndex)}</span>
       </div>
       <div class="challenge-level-buttons">
         ${SENTENCE_CHALLENGE_LEVELS.map((_, index) => `
@@ -467,13 +620,14 @@ function renderSentenceMode(exercise, session) {
       .map((sentence, index) => ({ sentence, index, rating: session.ratings[index] }))
       .filter((item) => item.rating === 'forgotten');
     const recommendation = getSentenceRoundRecommendation(exercise, session);
+    const stageLabel = exercise.challengeStageLabel || '当前关卡';
 
     return `
       <section class="sentence-summary">
         <article class="summary-hero">
           <p class="panel-kicker">本轮完成</p>
-          <h3>${exercise.roundType === 'mistake-retry' ? '这一轮错句重练已经结束' : '这一轮逐句练习已经结束'}</h3>
-          <p>${exercise.roundType === 'mistake-retry' ? '你刚完成了一轮错句强化，可以继续查看整篇原文和这轮仍未记住的句子。' : '回看整篇原文，再集中复盘刚才标记为“没记住”的句子。'}</p>
+          <h3>${exercise.roundType === 'mistake-retry' ? `这一轮 ${stageLabel} 错题重练已经结束` : `这一轮 ${stageLabel} 已经结束`}</h3>
+          <p>${exercise.roundType === 'mistake-retry' ? '你刚完成了一轮错题强化，可以继续查看整篇原文和这轮仍未记住的内容。' : '回看整篇原文，再集中复盘刚才标记为“没记住”的内容。'}</p>
           ${renderSentenceChallengeBar(exercise)}
           <div class="challenge-recommendation">
             <strong>${recommendation.title}</strong>
@@ -496,14 +650,14 @@ function renderSentenceMode(exercise, session) {
           </div>
           ${mistakeItems.length && recommendation.secondaryAction !== 'retry-mistakes' ? `
             <div class="summary-actions">
-              <button class="secondary-button" type="button" data-action="retry-mistakes">只练错句</button>
+              <button class="secondary-button" type="button" data-action="retry-mistakes">只练错题</button>
             </div>
           ` : ''}
         </article>
 
         <div class="summary-stats">
           <article class="summary-stat">
-            <span class="summary-stat-label">总句数</span>
+            <span class="summary-stat-label">总题数</span>
             <strong>${progress.total}</strong>
           </article>
           <article class="summary-stat">
@@ -529,21 +683,21 @@ function renderSentenceMode(exercise, session) {
         <article class="summary-section">
           <div class="summary-section-top">
             <div>
-              <p class="panel-kicker">错句复盘</p>
-              <h3>本轮待加强的句子</h3>
+              <p class="panel-kicker">错题复盘</p>
+              <h3>本轮待加强的内容</h3>
             </div>
           </div>
           ${mistakeItems.length ? `
             <div class="mistake-list">
               ${mistakeItems.map(({ sentence, index }) => `
                 <article class="mistake-item">
-                  <div class="sentence-index">第 ${index + 1} 句</div>
+                  <div class="sentence-index">第 ${index + 1} 题</div>
                   <div class="sentence-original">${escapeHtml(sentence.original)}</div>
                 </article>
               `).join('')}
             </div>
           ` : `
-            <div class="empty-inline-state">这轮全部标记为“记住了”，可以直接重新随机挑战下一轮。</div>
+            <div class="empty-inline-state">这轮全部标记为“记住了”，可以直接继续下一轮挑战。</div>
           `}
         </article>
       </section>
@@ -554,15 +708,18 @@ function renderSentenceMode(exercise, session) {
   const progressPercent = Math.round((progress.completed / progress.total) * 100);
   const isPreviewStage = session.stage === 'preview';
   const isRevealStage = session.stage === 'revealed';
-  const roundLabel = exercise.roundType === 'mistake-retry' ? '错句重练' : '逐句闯关';
+  const roundLabel = exercise.roundType === 'mistake-retry'
+    ? `${exercise.challengeStageLabel || '当前关卡'} · 错题重练`
+    : (exercise.challengeStageLabel || '单句关');
+  const unitLabel = exercise.challengeUnitLabel || '题';
 
   return `
     <section class="sentence-session">
       <article class="session-progress">
         <div class="session-progress-copy">
           <p class="panel-kicker">${roundLabel}</p>
-          <h3>第 ${session.currentIndex + 1} / ${progress.total} 句</h3>
-          <p>先看这一句原文，再开始测试；如果还想多练几次，可以只重新随机当前句。</p>
+          <h3>第 ${session.currentIndex + 1} / ${progress.total} ${unitLabel}</h3>
+          <p>先看当前内容原文，再开始测试；如果还想多练几次，可以只重新随机这一题。</p>
         </div>
         <div class="session-progress-pill">${progressPercent}%</div>
       </article>
@@ -572,14 +729,14 @@ function renderSentenceMode(exercise, session) {
       <article class="sentence-card sentence-focus-card">
         <div class="sentence-top">
           <div class="sentence-index">当前练习</div>
-          <div class="sentence-stats">已标记 ${progress.completed} 句 · 剩余 ${progress.remaining} 句</div>
+          <div class="sentence-stats">已标记 ${progress.completed} ${unitLabel} · 剩余 ${progress.remaining} ${unitLabel}</div>
         </div>
         ${isPreviewStage ? `
           <div class="sentence-reveal sentence-preview-block">
-            <div class="sentence-reveal-label">先看原句</div>
+            <div class="sentence-reveal-label">先看原文</div>
             <div class="sentence-original sentence-preview-text">${escapeHtml(currentSentence.original)}</div>
           </div>
-          <div class="sentence-tip">确认自己理解了这一句，再点击下方按钮进入测试。</div>
+          <div class="sentence-tip">确认自己理解了这一题，再点击下方按钮进入测试。</div>
         ` : `
           <div class="sentence-masked sentence-focus-text">${escapeHtml(currentSentence.masked)}</div>
         `}
@@ -597,11 +754,11 @@ function renderSentenceMode(exercise, session) {
         ${isPreviewStage ? `
           <button class="primary-button" type="button" data-action="start-testing">开始测试</button>
         ` : isRevealStage ? `
-          <button class="secondary-button" type="button" data-action="reshuffle-current">本句重新随机</button>
-          <button class="secondary-button rating-button rating-button-remembered" type="button" data-action="remembered">这句记住了</button>
-          <button class="secondary-button rating-button rating-button-forgotten" type="button" data-action="forgotten">这句没记住</button>
+          <button class="secondary-button" type="button" data-action="reshuffle-current">本题重新随机</button>
+          <button class="secondary-button rating-button rating-button-remembered" type="button" data-action="remembered">这题记住了</button>
+          <button class="secondary-button rating-button rating-button-forgotten" type="button" data-action="forgotten">这题没记住</button>
         ` : `
-          <button class="secondary-button" type="button" data-action="reshuffle-current">本句重新随机</button>
+          <button class="secondary-button" type="button" data-action="reshuffle-current">本题重新随机</button>
           <button class="primary-button" type="button" data-action="reveal">查看答案</button>
         `}
       </div>
@@ -632,9 +789,10 @@ function collectSentenceModeText(exercise, session) {
 
   if (session.currentIndex >= progress.total) {
     const lines = [
-      '逐句练习总结',
+      '闯关训练总结',
+      `当前关卡：${exercise.challengeStageLabel || '单句关'}`,
       `当前难度：${formatSentenceChallengeLabel(exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex)}`,
-      `总句数：${progress.total}`,
+      `总题数：${progress.total}`,
       `记住了：${progress.remembered}`,
       `没记住：${progress.forgotten}`,
       '',
@@ -645,20 +803,20 @@ function collectSentenceModeText(exercise, session) {
     const mistakeLines = exercise.sentences
       .map((sentence, index) => ({ sentence, index, rating: session.ratings[index] }))
       .filter((item) => item.rating === 'forgotten')
-      .map((item) => `第 ${item.index + 1} 句\n${item.sentence.original}`);
+      .map((item) => `第 ${item.index + 1} 题\n${item.sentence.original}`);
 
     if (mistakeLines.length) {
-      lines.push('', '错句列表', mistakeLines.join('\n\n'));
+      lines.push('', '错题列表', mistakeLines.join('\n\n'));
     }
 
     return lines.join('\n\n');
   }
 
   const currentSentence = exercise.sentences[session.currentIndex];
-  const lines = [`第 ${session.currentIndex + 1} / ${progress.total} 句`];
+  const lines = [`第 ${session.currentIndex + 1} / ${progress.total} ${exercise.challengeUnitLabel || '题'}`];
 
   if (session.stage === 'preview') {
-    lines.push('原句预览', currentSentence.original);
+    lines.push('原文预览', currentSentence.original);
     return lines.join('\n\n');
   }
 
@@ -741,7 +899,7 @@ function initApp() {
 
   function syncPracticeModeUi() {
     const isSentenceMode = practiceMode.value === 'sentence';
-    const sentenceTitle = lastExercise?.roundType === 'mistake-retry' ? '错句重练' : '逐句闯关';
+    const sentenceTitle = lastExercise?.roundType === 'mistake-retry' ? '错题重练' : '闯关训练';
     resultTitle.textContent = isSentenceMode ? sentenceTitle : '整段练习';
     toggleAnswerButton.classList.toggle('is-hidden', isSentenceMode);
     hideModeField.classList.toggle('is-hidden', isSentenceMode);
@@ -753,8 +911,10 @@ function initApp() {
     if (practiceMode.value === 'sentence') {
       sentenceSession = ensureSentenceSession(exercise, sentenceSession);
       const progress = getSentenceProgress(sentenceSession);
-      const roundLabel = exercise.roundType === 'mistake-retry' ? '错句重练' : '逐句闯关';
+      const stageLabel = exercise.challengeStageLabel || '单句关';
+      const roundLabel = exercise.roundType === 'mistake-retry' ? `${stageLabel} · 错题重练` : stageLabel;
       const difficultyLabel = formatSentenceChallengeLabel(exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex);
+      const unitLabel = exercise.challengeUnitLabel || '题';
 
       if (!progress.total) {
         resultMeta.textContent = '尚未生成';
@@ -762,11 +922,11 @@ function initApp() {
       }
 
       if (sentenceSession.currentIndex >= progress.total) {
-        resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · ${progress.total} 句 · 记住 ${progress.remembered} 句 · 待加强 ${progress.forgotten} 句`;
+        resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · ${progress.total} ${unitLabel} · 记住 ${progress.remembered} ${unitLabel} · 待加强 ${progress.forgotten} ${unitLabel}`;
         return;
       }
 
-      resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · 第 ${sentenceSession.currentIndex + 1}/${progress.total} 句 · 已标记 ${progress.completed} 句`;
+      resultMeta.textContent = `${formatLanguageLabel(exercise.language)} · ${roundLabel} · ${difficultyLabel} · 第 ${sentenceSession.currentIndex + 1}/${progress.total} ${unitLabel} · 已标记 ${progress.completed} ${unitLabel}`;
       return;
     }
 
@@ -822,7 +982,7 @@ function initApp() {
     sentenceSession = practiceMode.value === 'sentence' ? createSentenceSession(lastExercise) : null;
     renderExercise(lastExercise);
     statusBar.textContent = practiceMode.value === 'sentence'
-      ? `已进入逐句闯关模式，当前是 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。先看原句，再开始测试。`
+      ? `已进入闯关训练，当前关卡 ${lastExercise.challengeStageLabel || '单句关'}，难度 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`
       : '已生成新的练习版本，可以继续重新随机。';
   }
 
@@ -836,7 +996,7 @@ function initApp() {
 
     generate();
     statusBar.textContent = practiceMode.value === 'sentence'
-      ? '已开始新的逐句练习顺序，本轮状态也已重置。'
+      ? '已重新开始当前闯关回合，本轮状态也已重置。'
       : '已重新随机，每句话的缺失位置都更新了。';
   });
 
@@ -904,14 +1064,14 @@ function initApp() {
         getSentenceChallengeOptions(getOptions(), sentenceChallengeIndex),
       );
       if (!retryExercise) {
-        statusBar.textContent = '这一轮没有“没记住”的句子，暂时不需要错句重练。';
+        statusBar.textContent = '这一轮没有“没记住”的内容，暂时不需要错题重练。';
         return;
       }
 
       lastExercise = retryExercise;
       sentenceSession = createSentenceSession(lastExercise);
       renderExercise(lastExercise);
-      statusBar.textContent = `已开始只练错句，本轮共 ${lastExercise.sentences.length} 句，当前难度 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
+      statusBar.textContent = `已开始只练错题，本轮共 ${lastExercise.sentences.length} ${lastExercise.challengeUnitLabel || '题'}，当前难度 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
       return;
     }
 
@@ -919,7 +1079,7 @@ function initApp() {
       lastExercise = regenerateSentenceChallengeExercise(lastExercise, getOptions(), sentenceChallengeIndex);
       sentenceSession = createSentenceSession(lastExercise);
       renderExercise(lastExercise);
-      statusBar.textContent = `已重新开始 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 当前档训练。`;
+      statusBar.textContent = `已重新开始 ${lastExercise.challengeStageLabel || '当前关卡'} · ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
       return;
     }
 
@@ -948,6 +1108,23 @@ function initApp() {
       return;
     }
 
+    if (actionButton.dataset.action === 'next-stage') {
+      if (sentenceSession.currentIndex < progress.total) {
+        return;
+      }
+
+      const nextExercise = createNextStageChallengeExercise(lastExercise, getOptions(), sentenceChallengeIndex);
+      if (!nextExercise) {
+        return;
+      }
+
+      lastExercise = nextExercise;
+      sentenceSession = createSentenceSession(lastExercise);
+      renderExercise(lastExercise);
+      statusBar.textContent = `已进入 ${lastExercise.challengeStageLabel}，继续挑战 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
+      return;
+    }
+
     if (sentenceSession.currentIndex >= progress.total) {
       return;
     }
@@ -955,7 +1132,7 @@ function initApp() {
     if (actionButton.dataset.action === 'start-testing') {
       sentenceSession.stage = 'testing';
       renderExercise(lastExercise);
-      statusBar.textContent = '已进入当前句测试，可以直接作答，也可以先重新随机这一句。';
+      statusBar.textContent = '已进入当前题测试，可以直接作答，也可以先重新随机这一题。';
       return;
     }
 
@@ -967,14 +1144,14 @@ function initApp() {
       );
       sentenceSession.stage = 'testing';
       renderExercise(lastExercise);
-      statusBar.textContent = '当前句已重新随机，你可以继续只练这一句。';
+      statusBar.textContent = '当前题已重新随机，你可以继续只练这一题。';
       return;
     }
 
     if (actionButton.dataset.action === 'reveal') {
       sentenceSession.stage = 'revealed';
       renderExercise(lastExercise);
-      statusBar.textContent = '已显示当前句原文，请标记自己是否真的记住。';
+      statusBar.textContent = '已显示当前题原文，请标记自己是否真的记住。';
       return;
     }
 
@@ -994,16 +1171,16 @@ function initApp() {
       sentenceSession.currentIndex = progress.total;
       renderExercise(lastExercise);
       statusBar.textContent = lastExercise.roundType === 'mistake-retry'
-        ? '本轮错句重练已完成，可以继续回看整篇原文和剩余错句。'
-        : '本轮逐句练习已完成，可以回看整篇原文和错句列表。';
+        ? '本轮错题重练已完成，可以继续回看整篇原文和剩余错题。'
+        : `本轮 ${lastExercise.challengeStageLabel || '闯关训练'} 已完成，可以继续查看总结建议。`;
       return;
     }
 
     sentenceSession.currentIndex += 1;
     renderExercise(lastExercise);
     statusBar.textContent = actionButton.dataset.action === 'remembered'
-      ? `已标记第 ${currentSentenceNumber} 句为“记住了”，继续下一句。`
-      : `已标记第 ${currentSentenceNumber} 句为“没记住”，继续下一句。`;
+      ? `已标记第 ${currentSentenceNumber} 题为“记住了”，继续下一题。`
+      : `已标记第 ${currentSentenceNumber} 题为“没记住”，继续下一题。`;
   });
 
   document.querySelectorAll('[data-example]').forEach((button) => {
@@ -1037,7 +1214,7 @@ function initApp() {
 
       renderExercise(lastExercise);
       statusBar.textContent = practiceMode.value === 'sentence'
-        ? `已切换到逐句闯关模式，当前是 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`
+        ? `已切换到闯关训练，当前关卡 ${lastExercise.challengeStageLabel || '单句关'}，难度 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`
         : '已切换到整段练习模式。';
       return;
     }
