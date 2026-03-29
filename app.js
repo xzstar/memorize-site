@@ -231,17 +231,26 @@ function splitChallengeSections(normalizedText, language) {
     return [];
   }
 
+  let startSentenceIndex = 0;
+
   return normalizedText
     .split(/\n{2,}/)
     .map((sectionText) => sectionText.trim())
     .filter(Boolean)
-    .map((sectionText, index) => ({
-      key: `section-${index}`,
-      index,
-      label: `第 ${index + 1} 段`,
-      normalizedText: sectionText,
-      sentences: splitSentences(sectionText, language),
-    }));
+    .map((sectionText, index) => {
+      const sentences = splitSentences(sectionText, language);
+      const section = {
+        key: `section-${index}`,
+        index,
+        label: `第 ${index + 1} 段`,
+        normalizedText: sectionText,
+        sentences,
+        startSentenceIndex,
+      };
+
+      startSentenceIndex += sentences.length;
+      return section;
+    });
 }
 
 function createStageDefinition(key, baseKey, label, unitLabel, scopeText, scopeSentences, sectionIndex = null) {
@@ -364,9 +373,53 @@ function joinChallengeUnitTexts(unitTexts, language) {
   return language === 'en' ? unitTexts.join(' ') : unitTexts.join('');
 }
 
-function buildChallengeStageUnits(stageMeta, language) {
+function countChallengePromptUnits(text, language) {
+  return getHideableIndexes(tokenizeSentence(text, language)).length;
+}
+
+function getMinimumSinglePromptUnits(language) {
+  return language === 'en' ? 15 : 10;
+}
+
+function buildSingleStageUnits(stageMeta, source, language) {
+  const globalSentences = source.sourceSentences || [];
+  if (!globalSentences.length) {
+    return stageMeta.scopeSentences || [];
+  }
+
+  const section = typeof stageMeta.sectionIndex === 'number'
+    ? source.challengeSections?.[stageMeta.sectionIndex]
+    : null;
+  const startIndex = section?.startSentenceIndex ?? 0;
+  const unitCount = section?.sentences?.length ?? (stageMeta.scopeSentences?.length || globalSentences.length);
+  const minimumUnits = getMinimumSinglePromptUnits(language);
+
+  return Array.from({ length: unitCount }, (_, offset) => {
+    const unitTexts = [];
+    let cursor = startIndex + offset;
+
+    while (cursor < globalSentences.length) {
+      unitTexts.push(globalSentences[cursor]);
+      const combinedText = joinChallengeUnitTexts(unitTexts, language);
+
+      if (countChallengePromptUnits(combinedText, language) >= minimumUnits || cursor === globalSentences.length - 1) {
+        return combinedText;
+      }
+
+      cursor += 1;
+    }
+
+    return joinChallengeUnitTexts(unitTexts, language);
+  });
+}
+
+function buildChallengeStageUnits(stageMeta, source, language) {
   const sourceSentences = stageMeta.scopeSentences || [];
   const normalizedText = stageMeta.scopeText || '';
+
+  if (stageMeta.baseKey === 'single') {
+    return buildSingleStageUnits(stageMeta, source, language);
+  }
 
   if (stageMeta.baseKey === 'triple-overlap') {
     if (sourceSentences.length < 3) {
@@ -415,7 +468,7 @@ function decorateSentenceChallengeExercise(exercise, difficultyIndex, roundType 
 
 function buildChallengeExerciseFromSource(source, options, difficultyIndex, stageKey = 'single', roundType = 'full', reviewText = source.normalizedText) {
   const stageMeta = getChallengeStageMeta(source.challengeStages, stageKey);
-  const stageUnits = buildChallengeStageUnits(stageMeta, source.language);
+  const stageUnits = buildChallengeStageUnits(stageMeta, source, source.language);
   const challengeOptions = getSentenceChallengeOptions(options, difficultyIndex);
 
   return decorateSentenceChallengeExercise({
@@ -669,6 +722,23 @@ function reshuffleCurrentSentence(exercise, session, options) {
       return reshuffleSentence(sentence, exercise.language, options);
     }),
   };
+}
+
+function updatePendingChallengeDifficulty(exercise, session, options, difficultyIndex) {
+  if (!exercise?.sentences?.length) {
+    return exercise;
+  }
+
+  return decorateSentenceChallengeExercise({
+    ...exercise,
+    sentences: exercise.sentences.map((sentence, index) => {
+      if (index < session.currentIndex) {
+        return sentence;
+      }
+
+      return reshuffleSentence(sentence, exercise.language, getSentenceChallengeOptions(options, difficultyIndex));
+    }),
+  }, difficultyIndex, exercise.roundType, getReviewText(exercise));
 }
 
 function getSentenceRoundRecommendation(exercise, session) {
@@ -934,7 +1004,7 @@ function renderSentenceMode(exercise, session) {
         <div class="session-progress-copy">
           <p class="panel-kicker">${roundLabel}</p>
           <h3>第 ${session.currentIndex + 1} / ${progress.total} ${unitLabel}</h3>
-          <p>${finalBoss && bossCopy ? '先把全文顺序在脑中串起来，再开始最终测试；需要的话可以重新随机整篇挖空再冲一次。' : '先看当前内容原文，再开始测试；如果还想多练几次，可以只重新随机这一题。'}</p>
+          <p>${finalBoss && bossCopy ? '先把全文顺序在脑中串起来，再开始最终测试；需要的话可以重新随机整篇挖空，也可以直接跳过这一题。' : '先看当前内容原文，再开始测试；需要的话可以重新随机当前题，也可以直接跳过。'}</p>
         </div>
         <div class="session-progress-pill">${progressPercent}%</div>
       </article>
@@ -968,13 +1038,16 @@ function renderSentenceMode(exercise, session) {
       <div class="sentence-mode-actions">
         ${isPreviewStage ? `
           <button class="primary-button" type="button" data-action="start-testing">开始测试</button>
+          <button class="ghost-button" type="button" data-action="skip-current">跳过这题</button>
         ` : isRevealStage ? `
           <button class="secondary-button" type="button" data-action="reshuffle-current">本题重新随机</button>
           <button class="secondary-button rating-button rating-button-remembered" type="button" data-action="remembered">这题记住了</button>
           <button class="secondary-button rating-button rating-button-forgotten" type="button" data-action="forgotten">这题没记住</button>
+          <button class="ghost-button" type="button" data-action="skip-current">跳过这题</button>
         ` : `
           <button class="secondary-button" type="button" data-action="reshuffle-current">本题重新随机</button>
           <button class="primary-button" type="button" data-action="reveal">查看答案</button>
+          <button class="ghost-button" type="button" data-action="skip-current">跳过这题</button>
         `}
       </div>
     </section>
@@ -1318,6 +1391,16 @@ function initApp() {
         return;
       }
 
+      if (sentenceSession.currentIndex < progress.total) {
+        lastExercise = updatePendingChallengeDifficulty(lastExercise, sentenceSession, getOptions(), sentenceChallengeIndex);
+        sentenceSession.stage = 'preview';
+        renderExercise(lastExercise);
+        statusBar.textContent = isFinalBossStage(lastExercise)
+          ? `已把整篇总关切到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}，当前题和后续题都已更新。`
+          : `已把当前题和后续题切到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}，不需要重开这一轮。`;
+        return;
+      }
+
       lastExercise = lastExercise
         ? regenerateSentenceChallengeExercise(lastExercise, getOptions(), sentenceChallengeIndex)
         : generateSentenceChallengeExercise(sourceText.value, getOptions(), sentenceChallengeIndex);
@@ -1326,6 +1409,26 @@ function initApp() {
       statusBar.textContent = isFinalBossStage(lastExercise)
         ? `已切换到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 难度，继续冲击整篇总关。`
         : `已切换到 ${formatSentenceChallengeLabel(sentenceChallengeIndex)} 难度。`;
+      return;
+    }
+
+    if (actionButton.dataset.action === 'skip-current') {
+      const currentSentenceNumber = sentenceSession.currentIndex + 1;
+      sentenceSession.ratings[sentenceSession.currentIndex] = 'remembered';
+      sentenceSession.stage = 'preview';
+
+      if (sentenceSession.currentIndex >= progress.total - 1) {
+        sentenceSession.currentIndex = progress.total;
+        renderExercise(lastExercise);
+        statusBar.textContent = isFinalBossStage(lastExercise)
+          ? '已跳过最后一题，并按“记住了”处理。整篇总关已结束，可以查看总结。'
+          : '已跳过最后一题，并按“记住了”处理，可以查看本轮总结。';
+        return;
+      }
+
+      sentenceSession.currentIndex += 1;
+      renderExercise(lastExercise);
+      statusBar.textContent = `已跳过第 ${currentSentenceNumber} 题，并按“记住了”处理，继续下一题。`;
       return;
     }
 
