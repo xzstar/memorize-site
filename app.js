@@ -384,6 +384,7 @@ function createChallengeSource(text, options) {
       language: 'zh',
       sourceSentences: [],
       challengeSections: [],
+      challengeStagePerformance: {},
       challengeStages: getChallengeStageDefinitions([], normalizedText),
     };
   }
@@ -398,6 +399,7 @@ function createChallengeSource(text, options) {
     language,
     sourceSentences,
     challengeSections,
+    challengeStagePerformance: {},
     challengeStages: getChallengeStageDefinitions(challengeSections, normalizedText),
   };
 }
@@ -457,7 +459,11 @@ function buildChallengeStageUnits(stageMeta, source, language) {
   if (stageMeta.baseKey === 'review') {
     return (stageMeta.reviewStageKeys || []).flatMap((stageKey) => {
       const reviewSourceStage = getChallengeStageMeta(source.challengeStages, stageKey);
-      return buildChallengeStageUnits(reviewSourceStage, source, language);
+      const baseUnits = buildChallengeStageUnits(reviewSourceStage, source, language);
+      const weakIndexes = source.challengeStagePerformance?.[stageKey]?.weakIndexes || [];
+      const weakSet = new Set(weakIndexes);
+
+      return baseUnits.flatMap((unitText, index) => (weakSet.has(index) ? [unitText, unitText] : [unitText]));
     });
   }
 
@@ -522,6 +528,7 @@ function buildChallengeExerciseFromSource(source, options, difficultyIndex, stag
     language: source.language,
     sourceSentences: source.sourceSentences,
     challengeSections: source.challengeSections,
+    challengeStagePerformance: source.challengeStagePerformance || {},
     challengeStages: source.challengeStages,
     challengeStageKey: stageMeta.key,
     challengeStageIndex: source.challengeStages.findIndex((stage) => stage.key === stageMeta.key),
@@ -542,6 +549,7 @@ function buildChallengeExerciseFromUnits(exercise, unitTexts, options, difficult
     language: exercise.language,
     sourceSentences: exercise.sourceSentences,
     challengeSections: exercise.challengeSections,
+    challengeStagePerformance: exercise.challengeStagePerformance || {},
     challengeStages: exercise.challengeStages,
     challengeStageKey: exercise.challengeStageKey,
     challengeStageIndex: exercise.challengeStageIndex,
@@ -569,7 +577,50 @@ function rebuildChallengeSourceFromExercise(exercise) {
     language,
     sourceSentences,
     challengeSections,
+    challengeStagePerformance: exercise.challengeStagePerformance || {},
     challengeStages: exercise.challengeStages || getChallengeStageDefinitions(challengeSections, normalizedText),
+  };
+}
+
+function createSentenceItemState() {
+  return {
+    skipped: false,
+    reshuffles: 0,
+  };
+}
+
+function ensureSentenceItemStates(session, sentenceCount) {
+  const itemStates = session?.itemStates || [];
+  return Array.from({ length: sentenceCount }, (_, index) => ({
+    ...createSentenceItemState(),
+    ...(itemStates[index] || {}),
+  }));
+}
+
+function isWeakChallengeItem(session, index) {
+  const rating = session?.ratings?.[index];
+  const itemState = session?.itemStates?.[index] || createSentenceItemState();
+  return rating === 'forgotten' || itemState.skipped || itemState.reshuffles >= 2;
+}
+
+function recordChallengeStagePerformance(exercise, session) {
+  if (!exercise?.challengeStageKey || !session) {
+    return exercise?.challengeStagePerformance || {};
+  }
+
+  const weakIndexes = exercise.sentences.reduce((indexes, _, index) => {
+    if (isWeakChallengeItem(session, index)) {
+      indexes.push(index);
+    }
+
+    return indexes;
+  }, []);
+
+  return {
+    ...(exercise.challengeStagePerformance || {}),
+    [exercise.challengeStageKey]: {
+      weakIndexes,
+    },
   };
 }
 
@@ -669,14 +720,19 @@ function getNextChallengeStage(exercise) {
   return exercise.challengeStages?.[currentIndex + 1] || null;
 }
 
-function createNextStageChallengeExercise(exercise, options, difficultyIndex) {
+function createNextStageChallengeExercise(exercise, session, options, difficultyIndex) {
   const nextStage = getNextChallengeStage(exercise);
   if (!nextStage) {
     return null;
   }
 
+  const source = rebuildChallengeSourceFromExercise(exercise);
+
   return buildChallengeExerciseFromSource(
-    rebuildChallengeSourceFromExercise(exercise),
+    {
+      ...source,
+      challengeStagePerformance: recordChallengeStagePerformance(exercise, session),
+    },
     options,
     difficultyIndex,
     nextStage.key,
@@ -693,6 +749,7 @@ function createSentenceSession(exercise) {
     currentIndex: 0,
     stage: 'preview',
     ratings: exercise.sentences.map(() => null),
+    itemStates: exercise.sentences.map(() => createSentenceItemState()),
   };
 }
 
@@ -704,7 +761,10 @@ function ensureSentenceSession(exercise, session) {
     return createSentenceSession(exercise);
   }
 
-  return session;
+  return {
+    ...session,
+    itemStates: ensureSentenceItemStates(session, exercise.sentences.length),
+  };
 }
 
 function getSentenceProgress(session) {
@@ -1045,11 +1105,11 @@ function renderSentenceMode(exercise, session) {
   const stageIntroDescription = finalBoss && bossCopy ? bossCopy.introDescription : null;
   const previewLabel = finalBoss && bossCopy ? bossCopy.previewLabel : '先看原文';
   const previewTip = finalBoss && bossCopy
-    ? bossCopy.previewTip
-    : (reviewStage ? '这一关会把前面三关按原顺序完整回顾一遍，再点击下方按钮进入测试。' : '确认自己理解了这一题，再点击下方按钮进入测试。');
+      ? bossCopy.previewTip
+      : (reviewStage ? '这一关会把前面三关按原顺序完整回顾一遍；刚才跳过、没记住或反复重新随机的题会额外再过一遍。' : '确认自己理解了这一题，再点击下方按钮进入测试。');
   const testingTip = finalBoss && bossCopy
     ? bossCopy.testingTip
-    : (reviewStage ? '这是复现关，题目会按课文原顺序回放，先完整回忆再点击下方按钮看答案。' : '先在心里或口头背诵，再点击下方按钮看答案。');
+    : (reviewStage ? '这是复现关，题目会按课文原顺序回放；薄弱题会紧跟原题额外重复一次。' : '先在心里或口头背诵，再点击下方按钮看答案。');
 
   return `
     <section class="sentence-session">
@@ -1068,7 +1128,7 @@ function renderSentenceMode(exercise, session) {
         <div class="session-progress-copy">
           <p class="panel-kicker">${roundLabel}</p>
           <h3>第 ${session.currentIndex + 1} / ${progress.total} ${unitLabel}</h3>
-          <p>${finalBoss && bossCopy ? '先把全文顺序在脑中串起来，再开始最终测试；需要的话可以重新随机整篇挖空，也可以直接跳过这一题。' : (reviewStage ? '这是复现关，会把前面三关的内容按原顺序完整回放；不要打乱课文顺序。' : '先看当前内容原文，再开始测试；需要的话可以重新随机当前题，也可以直接跳过。')}</p>
+          <p>${finalBoss && bossCopy ? '先把全文顺序在脑中串起来，再开始最终测试；需要的话可以重新随机整篇挖空，也可以直接跳过这一题。' : (reviewStage ? '这是复现关，会把前面三关的内容按原顺序完整回放；刚才跳过、没记住或反复重新随机的题会紧跟原题再练一次。' : '先看当前内容原文，再开始测试；需要的话可以重新随机当前题，也可以直接跳过。')}</p>
         </div>
         <div class="session-progress-pill">${progressPercent}%</div>
       </article>
@@ -1478,6 +1538,7 @@ function initApp() {
 
     if (actionButton.dataset.action === 'skip-current') {
       const currentSentenceNumber = sentenceSession.currentIndex + 1;
+      sentenceSession.itemStates[sentenceSession.currentIndex].skipped = true;
       sentenceSession.ratings[sentenceSession.currentIndex] = 'remembered';
       sentenceSession.stage = 'preview';
 
@@ -1501,7 +1562,7 @@ function initApp() {
         return;
       }
 
-      const nextExercise = createNextStageChallengeExercise(lastExercise, getOptions(), sentenceChallengeIndex);
+      const nextExercise = createNextStageChallengeExercise(lastExercise, sentenceSession, getOptions(), sentenceChallengeIndex);
       if (!nextExercise) {
         return;
       }
@@ -1512,7 +1573,7 @@ function initApp() {
       statusBar.textContent = isFinalBossStage(lastExercise)
         ? `已进入 ${lastExercise.challengeStageLabel}，先把整篇顺序在脑中串起来，再开始最终测试。`
         : (isReviewStage(lastExercise)
-          ? `已进入 ${lastExercise.challengeStageLabel}，这一关会把前面三关按原顺序完整回顾一遍。`
+          ? `已进入 ${lastExercise.challengeStageLabel}，这一关会按原顺序完整回顾前面三关，薄弱题会额外再练一次。`
           : `已进入 ${lastExercise.challengeStageLabel}，继续挑战 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`);
       return;
     }
@@ -1531,6 +1592,7 @@ function initApp() {
     }
 
     if (actionButton.dataset.action === 'reshuffle-current') {
+      sentenceSession.itemStates[sentenceSession.currentIndex].reshuffles += 1;
       lastExercise = reshuffleCurrentSentence(
         lastExercise,
         sentenceSession,
