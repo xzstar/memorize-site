@@ -253,7 +253,7 @@ function splitChallengeSections(normalizedText, language) {
     });
 }
 
-function createStageDefinition(key, baseKey, label, unitLabel, scopeText, scopeSentences, sectionIndex = null) {
+function createStageDefinition(key, baseKey, label, unitLabel, scopeText, scopeSentences, sectionIndex = null, extra = {}) {
   return {
     key,
     baseKey,
@@ -262,6 +262,7 @@ function createStageDefinition(key, baseKey, label, unitLabel, scopeText, scopeS
     scopeText,
     scopeSentences,
     sectionIndex,
+    ...extra,
   };
 }
 
@@ -318,24 +319,60 @@ function buildSectionStageDefinitions(section, multiSection) {
   return stages;
 }
 
-function getChallengeStageDefinitions(challengeSections, normalizedText) {
-  if (challengeSections.length <= 1) {
-    return buildSectionStageDefinitions(
-      challengeSections[0] || { key: 'section-0', index: 0, label: '第 1 段', normalizedText, sentences: [] },
-      false,
-    );
+function insertReviewStages(contentStages) {
+  if (!contentStages.length) {
+    return contentStages;
   }
 
-  const stages = challengeSections.flatMap((section) => buildSectionStageDefinitions(section, true));
-  stages.push(createStageDefinition(
-    'full-passage',
-    'full-passage',
-    '整篇总关',
-    '题',
-    normalizedText,
-    challengeSections.flatMap((section) => section.sentences),
-  ));
+  const stages = [];
+
+  for (let index = 0; index < contentStages.length; index += 1) {
+    stages.push(contentStages[index]);
+
+    if ((index + 1) % 3 === 0) {
+      const reviewGroup = contentStages.slice(index - 2, index + 1);
+      const startStage = index - 1;
+      const endStage = index + 1;
+
+      stages.push(createStageDefinition(
+        `review-${startStage}-${endStage}`,
+        'review',
+        `复现关 · 第 ${startStage}-${endStage} 关`,
+        '题',
+        '',
+        [],
+        null,
+        {
+          reviewStageKeys: reviewGroup.map((stage) => stage.key),
+          reviewStageRange: [startStage, endStage],
+        },
+      ));
+    }
+  }
+
   return stages;
+}
+
+function getChallengeStageDefinitions(challengeSections, normalizedText) {
+  const contentStages = challengeSections.length <= 1
+    ? buildSectionStageDefinitions(
+      challengeSections[0] || { key: 'section-0', index: 0, label: '第 1 段', normalizedText, sentences: [] },
+      false,
+    )
+    : (() => {
+      const stages = challengeSections.flatMap((section) => buildSectionStageDefinitions(section, true));
+      stages.push(createStageDefinition(
+        'full-passage',
+        'full-passage',
+        '整篇总关',
+        '题',
+        normalizedText,
+        challengeSections.flatMap((section) => section.sentences),
+      ));
+      return stages;
+    })();
+
+  return insertReviewStages(contentStages);
 }
 
 function createChallengeSource(text, options) {
@@ -416,6 +453,13 @@ function buildSingleStageUnits(stageMeta, source, language) {
 function buildChallengeStageUnits(stageMeta, source, language) {
   const sourceSentences = stageMeta.scopeSentences || [];
   const normalizedText = stageMeta.scopeText || '';
+
+  if (stageMeta.baseKey === 'review') {
+    return (stageMeta.reviewStageKeys || []).flatMap((stageKey) => {
+      const reviewSourceStage = getChallengeStageMeta(source.challengeStages, stageKey);
+      return buildChallengeStageUnits(reviewSourceStage, source, language);
+    });
+  }
 
   if (stageMeta.baseKey === 'single') {
     return buildSingleStageUnits(stageMeta, source, language);
@@ -560,6 +604,16 @@ function formatSentenceChallengeLabel(difficultyIndex) {
 
 function getChallengeSectionProgress(exercise) {
   const totalSections = exercise.challengeSections?.length || 0;
+  const currentStage = getChallengeStageMeta(exercise.challengeStages || [], exercise.challengeStageKey || 'single');
+
+  if (currentStage.baseKey === 'review') {
+    const [startStage, endStage] = currentStage.reviewStageRange || [];
+    return {
+      label: `复现第 ${startStage}-${endStage} 关，按原顺序完整回顾`,
+      shortLabel: `复现第 ${startStage}-${endStage} 关`,
+    };
+  }
+
   if (totalSections <= 1) {
     return null;
   }
@@ -580,6 +634,11 @@ function getChallengeSectionProgress(exercise) {
 function isFinalBossStage(exercise) {
   const currentStage = getChallengeStageMeta(exercise.challengeStages || [], exercise.challengeStageKey || 'single');
   return currentStage.baseKey === 'full-passage' && !getNextChallengeStage(exercise);
+}
+
+function isReviewStage(exercise) {
+  const currentStage = getChallengeStageMeta(exercise.challengeStages || [], exercise.challengeStageKey || 'single');
+  return currentStage.baseKey === 'review';
 }
 
 function getFinalBossCopy(exercise) {
@@ -869,6 +928,7 @@ function renderSentenceCard(sentence, index, showOriginal) {
 function renderSentenceMode(exercise, session) {
   const progress = getSentenceProgress(session);
   const finalBoss = isFinalBossStage(exercise);
+  const reviewStage = isReviewStage(exercise);
   const bossCopy = finalBoss ? getFinalBossCopy(exercise) : null;
   const sectionProgress = getChallengeSectionProgress(exercise);
 
@@ -984,8 +1044,12 @@ function renderSentenceMode(exercise, session) {
   const stageIntroTitle = finalBoss && bossCopy ? bossCopy.introTitle : null;
   const stageIntroDescription = finalBoss && bossCopy ? bossCopy.introDescription : null;
   const previewLabel = finalBoss && bossCopy ? bossCopy.previewLabel : '先看原文';
-  const previewTip = finalBoss && bossCopy ? bossCopy.previewTip : '确认自己理解了这一题，再点击下方按钮进入测试。';
-  const testingTip = finalBoss && bossCopy ? bossCopy.testingTip : '先在心里或口头背诵，再点击下方按钮看答案。';
+  const previewTip = finalBoss && bossCopy
+    ? bossCopy.previewTip
+    : (reviewStage ? '这一关会把前面三关按原顺序完整回顾一遍，再点击下方按钮进入测试。' : '确认自己理解了这一题，再点击下方按钮进入测试。');
+  const testingTip = finalBoss && bossCopy
+    ? bossCopy.testingTip
+    : (reviewStage ? '这是复现关，题目会按课文原顺序回放，先完整回忆再点击下方按钮看答案。' : '先在心里或口头背诵，再点击下方按钮看答案。');
 
   return `
     <section class="sentence-session">
@@ -1004,7 +1068,7 @@ function renderSentenceMode(exercise, session) {
         <div class="session-progress-copy">
           <p class="panel-kicker">${roundLabel}</p>
           <h3>第 ${session.currentIndex + 1} / ${progress.total} ${unitLabel}</h3>
-          <p>${finalBoss && bossCopy ? '先把全文顺序在脑中串起来，再开始最终测试；需要的话可以重新随机整篇挖空，也可以直接跳过这一题。' : '先看当前内容原文，再开始测试；需要的话可以重新随机当前题，也可以直接跳过。'}</p>
+          <p>${finalBoss && bossCopy ? '先把全文顺序在脑中串起来，再开始最终测试；需要的话可以重新随机整篇挖空，也可以直接跳过这一题。' : (reviewStage ? '这是复现关，会把前面三关的内容按原顺序完整回放；不要打乱课文顺序。' : '先看当前内容原文，再开始测试；需要的话可以重新随机当前题，也可以直接跳过。')}</p>
         </div>
         <div class="session-progress-pill">${progressPercent}%</div>
       </article>
@@ -1447,7 +1511,9 @@ function initApp() {
       renderExercise(lastExercise);
       statusBar.textContent = isFinalBossStage(lastExercise)
         ? `已进入 ${lastExercise.challengeStageLabel}，先把整篇顺序在脑中串起来，再开始最终测试。`
-        : `已进入 ${lastExercise.challengeStageLabel}，继续挑战 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`;
+        : (isReviewStage(lastExercise)
+          ? `已进入 ${lastExercise.challengeStageLabel}，这一关会把前面三关按原顺序完整回顾一遍。`
+          : `已进入 ${lastExercise.challengeStageLabel}，继续挑战 ${formatSentenceChallengeLabel(sentenceChallengeIndex)}。`);
       return;
     }
 
