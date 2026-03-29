@@ -554,6 +554,32 @@ select {
   line-height: 1.8;
 }
 
+.review-stage-notice {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(138, 59, 18, 0.12), rgba(36, 76, 68, 0.08));
+  border: 1px solid rgba(138, 59, 18, 0.14);
+  padding: 16px;
+}
+
+.review-stage-notice .panel-kicker,
+.review-stage-notice p {
+  margin: 0;
+}
+
+.review-stage-notice strong {
+  font-family: var(--font-display);
+  font-size: 1.18rem;
+  color: var(--ink);
+}
+
+.review-stage-notice p:last-child {
+  color: var(--muted);
+  line-height: 1.75;
+}
+
 .summary-actions {
   display: flex;
   flex-wrap: wrap;

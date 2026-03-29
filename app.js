@@ -865,6 +865,7 @@ function getSentenceRoundRecommendation(exercise, session) {
   const currentIndex = exercise.challengeLevelIndex ?? DEFAULT_OPTIONS.sentenceChallengeIndex;
   const currentLabel = formatSentenceChallengeLabel(currentIndex);
   const nextStage = exercise.roundType === 'mistake-retry' ? null : getNextChallengeStage(exercise);
+  const reviewStage = nextStage?.baseKey === 'review' ? nextStage : null;
   const finalBoss = isFinalBossStage(exercise);
   const bossCopy = finalBoss ? getFinalBossCopy(exercise) : null;
 
@@ -874,26 +875,30 @@ function getSentenceRoundRecommendation(exercise, session) {
       const fallbackLabel = formatSentenceChallengeLabel(fallbackIndex);
       return {
         title: finalBoss ? `整篇总关在 ${currentLabel} 有点卡住了` : `这一轮在 ${currentLabel} 有点卡住了`,
-        description: finalBoss
+        description: reviewStage
+          ? `建议先回到 ${fallbackLabel} 稳住，再进入 ${reviewStage.label} 按顺序完整回顾前面三关。`
+          : finalBoss
           ? `建议先回到 ${fallbackLabel} 稳住整篇顺序，再回来继续冲击 ${currentLabel}。`
           : `建议先回到 ${fallbackLabel} 稳住，再继续挑战 ${currentLabel}。`,
         primaryAction: 'jump-difficulty',
         primaryLabel: `回到 ${fallbackLabel}`,
         primaryLevel: fallbackIndex,
-        secondaryAction: 'retry-current',
-        secondaryLabel: `重练 ${currentLabel}`,
+        secondaryAction: reviewStage ? 'next-stage' : 'retry-current',
+        secondaryLabel: reviewStage ? `进入${reviewStage.label}` : `重练 ${currentLabel}`,
       };
     }
 
     return {
       title: finalBoss ? `先把整篇总关的 ${currentLabel} 练稳` : `先把 ${currentLabel} 这一档练稳`,
-      description: finalBoss
+      description: reviewStage
+        ? `可以继续重练当前难度，也可以先进入 ${reviewStage.label}，把前面三关按顺序再过一遍。`
+        : finalBoss
         ? '可以继续重练整篇，也可以先只练错题，把整篇里的断点补起来。'
         : '可以继续重练当前难度，或者只练错题把断点先补起来。',
       primaryAction: 'retry-current',
       primaryLabel: `重练 ${currentLabel}`,
-      secondaryAction: 'retry-mistakes',
-      secondaryLabel: '只练错题',
+      secondaryAction: reviewStage ? 'next-stage' : 'retry-mistakes',
+      secondaryLabel: reviewStage ? `进入${reviewStage.label}` : '只练错题',
     };
   }
 
@@ -1000,6 +1005,8 @@ function renderSentenceMode(exercise, session) {
     const mistakeItems = exercise.sentences
       .map((sentence, index) => ({ sentence, index, rating: session.ratings[index] }))
       .filter((item) => item.rating === 'forgotten');
+    const nextStage = exercise.roundType === 'mistake-retry' ? null : getNextChallengeStage(exercise);
+    const upcomingReviewStage = nextStage?.baseKey === 'review' ? nextStage : null;
     const recommendation = getSentenceRoundRecommendation(exercise, session);
     const stageLabel = exercise.challengeStageLabel || '当前关卡';
     const summaryTitle = finalBoss && bossCopy
@@ -1017,6 +1024,13 @@ function renderSentenceMode(exercise, session) {
           <h3>${summaryTitle}</h3>
           <p>${summaryDescription}</p>
           ${renderSentenceChallengeBar(exercise)}
+          ${upcomingReviewStage ? `
+            <div class="review-stage-notice">
+              <p class="panel-kicker">下一步提示</p>
+              <strong>下一步将进入${upcomingReviewStage.label}</strong>
+              <p>系统会按课文原顺序完整回顾前面 3 关；薄弱题会紧跟原题额外再练一次。</p>
+            </div>
+          ` : ''}
           <div class="challenge-recommendation">
             <strong>${recommendation.title}</strong>
             <p>${recommendation.description}</p>
